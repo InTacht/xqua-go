@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/InTacht/xqua-go/pkg/runtime"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+// Compile-time check: *Logger implements runtime.Logger, including Derive.
+var _ runtime.Logger = (*Logger)(nil)
 
 const (
 	DefaultRequestIDHeaderKey = "X-Request-ID"
@@ -58,7 +63,11 @@ func New(config *Config) *Logger {
 }
 
 // Derive returns a child logger with label extended by the given segment.
-func (l *Logger) Derive(label string) *Logger {
+// Children share the root's zap core and are cheap to create; do not Close
+// them — only the root from New/FromZap owns the lifecycle.
+// The return type is runtime.Logger so *Logger satisfies that interface;
+// the dynamic type remains *Logger.
+func (l *Logger) Derive(label string) runtime.Logger {
 	cfg := *l.config
 	cfg.Label = joinLabel(l.config.Label, label)
 
@@ -95,15 +104,13 @@ func (l *Logger) RequestID(ctx context.Context) (string, bool) {
 	return id, true
 }
 
-// Close flushes buffered log entries. Sync errors on stdout/stderr are ignored.
+// Close flushes buffered log entries. Call only on the root logger from
+// New/FromZap (typically defer appLog.Close() in main). Derived children share
+// the same core; closing a child is unnecessary and still Syncs that core.
+// Sync errors on stdout/stderr are ignored.
 func (l *Logger) Close() {
 	l.logger.Debug("logger closed")
 	_ = l.logger.Sync()
-}
-
-// DeInit is deprecated; use Close instead.
-func (l *Logger) DeInit() {
-	l.Close()
 }
 
 func normalizeConfig(config *Config) *Config {

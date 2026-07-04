@@ -35,9 +35,14 @@ func TestErrorObjectsSkipsNil(t *testing.T) {
 	core, recorded := observer.New(zapcore.ErrorLevel)
 	log := FromZap(nil, zap.New(core))
 
+	catalog := errors.NewCatalog("logger-internal")
+	entry := catalog.Define(errors.Def{
+		Code: "422301", Message: "required", Source: "body.id",
+	})
+
 	errs := errors.Errors{
 		nil,
-		errors.New("validation", "422301", "required", "body.id"),
+		entry,
 	}
 	log.Error(errs, "validation failed")
 
@@ -48,7 +53,11 @@ func TestErrorObjectsSkipsNil(t *testing.T) {
 }
 
 func TestErrorObjectsMarshalFailure(t *testing.T) {
-	err := errorObjects{errors.New("validation", "422301", "fail")}.MarshalLogArray(failArrayEncoder{})
+	catalog := errors.NewCatalog("marshal")
+	entry := catalog.Define(errors.Def{
+		Code: "422301", Message: "fail",
+	})
+	err := errorObjects{entry}.MarshalLogArray(failArrayEncoder{})
 	if err == nil {
 		t.Fatal("expected marshal error")
 	}

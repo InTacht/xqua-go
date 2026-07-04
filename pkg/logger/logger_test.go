@@ -103,17 +103,17 @@ func TestDeriveLabel(t *testing.T) {
 	same := child.Derive("")
 	grandchild := child.Derive("GetUser")
 
-	if child.Zap() == nil || grandchild.Zap() == nil {
-		t.Fatal("expected derived zap loggers")
+	childLog, ok := child.(*logger.Logger)
+	if !ok || childLog.Zap() == nil {
+		t.Fatal("expected derived *Logger with zap core")
+	}
+	grandchildLog, ok := grandchild.(*logger.Logger)
+	if !ok || grandchildLog.Zap() == nil {
+		t.Fatal("expected grandchild *Logger with zap core")
 	}
 	if same == child {
 		t.Fatal("Derive(\"\") should return a new logger")
 	}
-}
-
-func TestDeInit(t *testing.T) {
-	log := logger.New(nil)
-	log.DeInit()
 }
 
 func TestJoinMessageEmpty(t *testing.T) {

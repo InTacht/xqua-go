@@ -7,8 +7,10 @@ import (
 )
 
 // Error is the canonical error shape for xqua.
-// Define kinds and codes in your application; the library only enforces shape.
-// Wrapped errors form a linked list via cause for bubbling.
+// Create entries with Catalog.Define. Identity is the defined entry itself:
+// clones made by Wrap, WithSource, and WithMessage keep a reference to their
+// template entry, and Is compares those references — never Kind or Code
+// strings. Wrapped errors form a linked list via cause for bubbling.
 type Error struct {
 	Kind    string
 	Code    string
@@ -16,28 +18,9 @@ type Error struct {
 	Source  string
 
 	cause error
-}
-
-// New builds a canonical error from up to four positional strings:
-// kind, code, message, source. Omitted trailing arguments are left empty.
-func New(args ...string) *Error {
-	if len(args) > 4 {
-		args = args[:4]
-	}
-	e := &Error{}
-	if len(args) > 0 {
-		e.Kind = args[0]
-	}
-	if len(args) > 1 {
-		e.Code = args[1]
-	}
-	if len(args) > 2 {
-		e.Message = args[2]
-	}
-	if len(args) > 3 {
-		e.Source = args[3]
-	}
-	return e
+	// entry points at the catalog template this error was defined as (or
+	// cloned from). It is the identity compared by Is.
+	entry *Error
 }
 
 // NewPlain returns a plain error with the given message. It delegates to the

@@ -1,61 +1,96 @@
 package transport
 
 import (
-	"time"
+	"context"
+	"strconv"
 
-	"github.com/InTacht/xqua-go/examples/api/ctx"
+	"github.com/InTacht/xqua-go/examples/api/store"
 	"github.com/InTacht/xqua-go/pkg/errors"
-	"github.com/InTacht/xqua-go/pkg/logger"
-	"github.com/InTacht/xqua-go/pkg/transport"
-	"github.com/InTacht/xqua-go/pkg/transport/http"
+	"github.com/InTacht/xqua-go/pkg/http"
+	"github.com/InTacht/xqua-go/pkg/runtime"
 
 	"github.com/gofiber/fiber/v3"
 )
 
+// Public API catalog: the only errors allowed to cross the wire.
+var apiCatalog = errors.NewCatalog("api")
+
 var (
-	errUserIDRequired = errors.New("validation", "422301", "id is required", "params.id")
-	errUserNotFound   = errors.New("not_found", "404301", "user not found", "params.id")
-	errFetchUser      = errors.New("internal", "500301", "fetch user failed")
+	errUserIDRequired = apiCatalog.Define(errors.Def{
+		Kind: errors.KindValidation, Code: "10001", Message: "id is required", Source: "params.id",
+	})
+	errUserNotFound = apiCatalog.Define(errors.Def{
+		Kind: errors.KindNotFound, Code: "10002", Message: "user not found", Source: "params.id",
+	})
+	errFetchUser = apiCatalog.Define(errors.Def{
+		Kind: errors.KindInternal, Code: "10003", Message: "fetch user failed",
+	})
+	errListUsers = apiCatalog.Define(errors.Def{
+		Kind: errors.KindInternal, Code: "10004", Message: "list users failed",
+	})
 )
 
-func HTTP(c *ctx.Ctx, log *logger.Logger) transport.Transport {
+// Deps is the subset of process state the HTTP unit needs. main narrows the
+// app context at registration; this package never imports it.
+type Deps struct {
+	Host    string
+	Port    int
+	Version string
+	Name    string
+	Users   *store.Users
+	Ping    func(context.Context) error
+}
+
+// HTTP builds the HTTP unit. Logger + Catalog are required; Host/Port come
+// from env-backed app config.
+func HTTP(d Deps, log runtime.Logger) runtime.Unit {
 	return http.New(http.Config{
-		Host:   c.Host,
-		Port:   c.Port,
-		Logger: log,
-		FiberConfig: fiber.Config{
-			ServerHeader: c.Name,
-			ReadTimeout:  30 * time.Second,
-		},
+		Host:        d.Host,
+		Port:        d.Port,
+		Logger:      log,
+		Catalog:     apiCatalog,
+		HealthCheck: d.Ping,
+		Version:     d.Version,
+		FiberConfig: fiber.Config{ServerHeader: d.Name},
 	}).
-		Routes("/", func(r fiber.Router) {
-			r.Get("/health", func(c fiber.Ctx) error {
-				return http.RES(c).Message("alive").Ok()
+		Routes("/api/v1", func(r *http.Router) {
+			r.Get("/users", listUsers(d.Users, log))
+			r.Get("/users/:id", getUser(d.Users, log))
+			r.Get("/boom", func(c fiber.Ctx) error {
+				return errors.NewPlain("simulated failure")
 			})
-		}).
-		Routes("/api/v1", func(r fiber.Router) {
-			r.Get("/users/:id", getUser(log))
 		})
 }
 
-func getUser(log *logger.Logger) fiber.Handler {
+func listUsers(s *store.Users, log runtime.Logger) fiber.Handler {
 	return func(c fiber.Ctx) error {
-		id := c.Params("id")
-		if id == "" {
-			return http.RES(c).Message("validation failed").Error(errUserIDRequired).Ok()
-		}
-
-		user, err := fetchUser(id)
+		users, err := s.List(c.Context(), 50)
 		if err != nil {
-			err = mapFetchUserErr(err)
-			if errors.Is(err, errUserNotFound) {
-				return http.RES(c).Message("not found").Error(errUserNotFound).Ok()
-			}
-			log.ErrorCtx(c.Context(), err, "fetch user failed")
-			return http.RES(c).Message("internal error").Apply(err).Ok()
+			log.ErrorCtx(c.Context(), err, "list users failed")
+			return mapStoreErr(err, errListUsers)
+		}
+		log.InfoCtx(c.Context(), "list users", strconv.Itoa(len(users)))
+		return http.RES(c).
+			Message("users listed").
+			Data("users", users).
+			Ok()
+	}
+}
+
+func getUser(s *store.Users, log runtime.Logger) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		id, err := http.ParamInt64(c, "id")
+		if err != nil || id <= 0 {
+			return errUserIDRequired
 		}
 
-		log.InfoCtx(c.Context(), "fetch user", id)
+		user, err := s.GetByID(c.Context(), id)
+		if err != nil {
+			log.ErrorCtx(c.Context(), err, "fetch user failed", strconv.FormatInt(id, 10))
+			return mapStoreErr(err, errFetchUser)
+		}
+
+		log.InfoCtx(c.Context(), "fetch user", strconv.FormatInt(id, 10))
 		return http.RES(c).
 			Message("user fetched").
 			Data("user", user).
@@ -63,22 +98,9 @@ func getUser(log *logger.Logger) fiber.Handler {
 	}
 }
 
-func fetchUser(id string) (fiber.Map, error) {
-	if id == "0" {
-		return nil, errors.NewPlain("record not found")
-	}
-
-	return fiber.Map{
-		"id":   id,
-		"name": "Example User",
-	}, nil
-}
-
-func mapFetchUserErr(err error) error {
-	return errors.MapOr(err, errFetchUser.Kind, errFetchUser.Code, errFetchUser.Message, func(e error) (*errors.Error, bool) {
-		if e.Error() == "record not found" {
-			return errUserNotFound, true
-		}
-		return nil, false
-	})
+// mapStoreErr maps internal store errors into the public API catalog.
+func mapStoreErr(err error, fallback *errors.Error) error {
+	return errors.MapOr(err, fallback,
+		errors.Pair(store.ErrNotFound, errUserNotFound),
+	)
 }

@@ -6,109 +6,262 @@ import (
 	"github.com/InTacht/xqua-go/pkg/errors"
 )
 
-func TestError(t *testing.T) {
-	t.Run("New variadic args", func(t *testing.T) {
-		full := errors.New("validation", "422301", "required", "body.id")
-		if full.Kind != "validation" || full.Code != "422301" || full.Message != "required" || full.Source != "body.id" {
-			t.Fatalf("unexpected full error: %+v", full)
-		}
+func TestCatalogDefine(t *testing.T) {
+	c := errors.NewCatalog("define")
 
-		partial := errors.New("internal", "500001", "query failed")
-		if partial.Source != "" {
-			t.Fatalf("expected empty source, got %q", partial.Source)
+	t.Run("kind defaults to catalog name", func(t *testing.T) {
+		entry := c.Define(errors.Def{
+			Code: "422301", Message: "required", Source: "body.id",
+		})
+		if entry.Kind != "define" || entry.Code != "422301" {
+			t.Fatalf("unexpected entry: %+v", entry)
 		}
-
-		minimal := errors.New("not_found", "404301")
-		if minimal.Message != "" || minimal.Source != "" {
-			t.Fatalf("expected empty message and source, got %+v", minimal)
-		}
-
-		empty := errors.New()
-		if empty.Kind != "" || empty.Code != "" {
-			t.Fatal("expected all fields empty")
-		}
-
-		truncated := errors.New("a", "b", "c", "d", "ignored")
-		if truncated.Source != "d" {
-			t.Fatalf("expected source d, got %q", truncated.Source)
+		if entry.Message != "required" || entry.Source != "body.id" {
+			t.Fatalf("unexpected message/source: %+v", entry)
 		}
 	})
 
-	t.Run("NewPlain delegates to standard library", func(t *testing.T) {
-		err := errors.NewPlain("connection reset by peer")
-		if err.Error() != "connection reset by peer" {
-			t.Fatalf("unexpected message: %q", err.Error())
-		}
-		if errors.Is(err, errors.NewPlain("connection reset by peer")) {
-			t.Fatal("expected Is to match by identity, not message")
+	t.Run("explicit semantic kind", func(t *testing.T) {
+		entry := c.Define(errors.Def{
+			Kind: "validation", Code: "422302", Message: "invalid",
+		})
+		if entry.Kind != "validation" {
+			t.Fatalf("expected explicit kind, got %q", entry.Kind)
 		}
 	})
 
-	t.Run("Error string format", func(t *testing.T) {
-		for _, tc := range []struct {
-			name string
-			err  *errors.Error
-			want string
-		}{
-			{
-				name: "full",
-				err:  errors.New("validation", "422301", "required", "body.id"),
-				want: "validation<422301>(body.id): required",
-			},
-			{
-				name: "without source",
-				err:  errors.New("internal", "500001", "query failed"),
-				want: "internal<500001>: query failed",
-			},
-			{
-				name: "code and message only",
-				err:  errors.New("", "500000", "fallback"),
-				want: "<500000>: fallback",
-			},
-			{
-				name: "kind and code only",
-				err:  errors.New("not_found", "404301"),
-				want: "not_found<404301>",
-			},
-			{
-				name: "empty",
-				err:  errors.New(),
-				want: "",
-			},
-			{
-				name: "nil receiver",
-				err:  nil,
-				want: "",
-			},
-		} {
-			t.Run(tc.name, func(t *testing.T) {
-				var got string
-				if tc.err != nil {
-					got = tc.err.Error()
-				} else {
-					var nilErr *errors.Error
-					got = nilErr.Error()
-				}
-				if got != tc.want {
-					t.Fatalf("Error() = %q, want %q", got, tc.want)
-				}
-			})
+	t.Run("code may be any non-empty identifier", func(t *testing.T) {
+		entry := c.Define(errors.Def{Code: "USER_MISSING", Message: "missing"})
+		if entry.Code != "USER_MISSING" {
+			t.Fatalf("expected freeform code, got %q", entry.Code)
 		}
 	})
+
+	t.Run("empty code panics", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic for empty code")
+			}
+		}()
+		c.Define(errors.Def{Message: "no code"})
+	})
+
+	t.Run("duplicate code panics", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic for duplicate code")
+			}
+		}()
+		c.Define(errors.Def{Code: "422301", Message: "duplicate"})
+	})
+}
+
+func TestNewCatalog(t *testing.T) {
+	t.Run("empty name panics", func(t *testing.T) {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic for empty name")
+			}
+		}()
+		errors.NewCatalog("   ")
+	})
+
+	t.Run("names may repeat without identity collisions", func(t *testing.T) {
+		a := errors.NewCatalog("shared-name")
+		b := errors.NewCatalog("shared-name")
+		errA := a.Define(errors.Def{Code: "10001", Message: "from a"})
+		errB := b.Define(errors.Def{Code: "10001", Message: "from b"})
+
+		if errors.Is(errA, errB) || errors.Is(errB, errA) {
+			t.Fatal("entries from different catalogs must never match, even with equal kind and code")
+		}
+		if !errors.Is(errA, errA) {
+			t.Fatal("entry must match itself")
+		}
+	})
+}
+
+func TestPointerIdentity(t *testing.T) {
+	catalog := newTestCatalog()
+
+	t.Run("clones match their template entry", func(t *testing.T) {
+		clone := catalog.errUserNotFound.WithMessage("custom message").WithSource("query.id")
+		if !errors.Is(clone, catalog.errUserNotFound) {
+			t.Fatal("expected clone to match its catalog entry")
+		}
+		if !errors.Is(catalog.errUserNotFound, clone) {
+			t.Fatal("expected match to be symmetric")
+		}
+	})
+
+	t.Run("manually constructed errors never match", func(t *testing.T) {
+		impostor := &errors.Error{
+			Kind: catalog.errUserNotFound.Kind, Code: catalog.errUserNotFound.Code,
+		}
+		if errors.Is(impostor, catalog.errUserNotFound) {
+			t.Fatal("kind/code strings alone must not grant identity")
+		}
+	})
+}
+
+func TestIsKind(t *testing.T) {
+	catalog := newTestCatalog()
+
+	t.Run("matches top-level kind", func(t *testing.T) {
+		if !errors.IsKind(catalog.errIDRequired, "validation") {
+			t.Fatal("expected kind match")
+		}
+		if errors.IsKind(catalog.errIDRequired, "not_found") {
+			t.Fatal("expected kind mismatch")
+		}
+	})
+
+	t.Run("matches shared kinds across catalogs", func(t *testing.T) {
+		other := errors.NewCatalog("other").Define(errors.Def{
+			Kind: "validation", Code: "1", Message: "other validation",
+		})
+		if !errors.IsKind(other, "validation") {
+			t.Fatal("expected shared kind to match across catalogs")
+		}
+	})
+
+	t.Run("walks wrap chains and collections", func(t *testing.T) {
+		wrapped := errors.Wrap(catalog.errUserNotFound, catalog.errFetchUserFailed)
+		if !errors.IsKind(wrapped, "not_found") {
+			t.Fatal("expected kind found in wrap chain")
+		}
+
+		errs := errors.Errors{catalog.errQueryFailed, catalog.errIDRequired}
+		top := errors.Wrap(errs, catalog.errValidationFail)
+		if !errors.IsKind(top, "validation") {
+			t.Fatal("expected kind found inside collection behind a wrap")
+		}
+	})
+
+	t.Run("plain, nil, and empty kind", func(t *testing.T) {
+		if errors.IsKind(errors.NewPlain("plain"), "validation") {
+			t.Fatal("plain errors have no kind")
+		}
+		if errors.IsKind(nil, "validation") {
+			t.Fatal("nil has no kind")
+		}
+		if errors.IsKind(catalog.errIDRequired, "") {
+			t.Fatal("empty kind must not match")
+		}
+	})
+}
+
+func TestCatalogLookupAndEntries(t *testing.T) {
+	c := errors.NewCatalog("lookup")
+	a := c.Define(errors.Def{Code: "2", Message: "second"})
+	b := c.Define(errors.Def{Code: "1", Message: "first"})
+
+	t.Run("Lookup decodes code to entry", func(t *testing.T) {
+		got, ok := c.Lookup("2")
+		if !ok || got != a {
+			t.Fatalf("expected entry a, got %v (ok=%v)", got, ok)
+		}
+		if _, ok := c.Lookup("missing"); ok {
+			t.Fatal("expected miss for unknown code")
+		}
+	})
+
+	t.Run("Entries sorted by code", func(t *testing.T) {
+		entries := c.Entries()
+		if len(entries) != 2 || entries[0] != b || entries[1] != a {
+			t.Fatalf("unexpected entries order: %v", codes(entries))
+		}
+	})
+
+	t.Run("Contains matches entries and clones only", func(t *testing.T) {
+		if !c.Contains(a) || !c.Contains(a.WithMessage("clone")) {
+			t.Fatal("expected entry and clone to be contained")
+		}
+		foreign := errors.NewCatalog("foreign").Define(errors.Def{Code: "2", Message: "impostor"})
+		if c.Contains(foreign) {
+			t.Fatal("foreign entry with same code must not be contained")
+		}
+		if c.Contains(nil) {
+			t.Fatal("nil must not be contained")
+		}
+	})
+}
+
+func TestNewPlain(t *testing.T) {
+	err := errors.NewPlain("connection reset by peer")
+	if err.Error() != "connection reset by peer" {
+		t.Fatalf("unexpected message: %q", err.Error())
+	}
+	if errors.Is(err, errors.NewPlain("connection reset by peer")) {
+		t.Fatal("expected Is to match by identity, not message")
+	}
+}
+
+func TestErrorStringFormat(t *testing.T) {
+	catalog := newTestCatalog()
+
+	for _, tc := range []struct {
+		name string
+		err  *errors.Error
+		want string
+	}{
+		{
+			name: "full",
+			err:  catalog.errIDRequired,
+			want: "validation<422301>(body.id): id is required",
+		},
+		{
+			name: "without source",
+			err:  catalog.errQueryFailed,
+			want: "internal<500001>: query failed",
+		},
+		{
+			name: "fallback",
+			err:  catalog.errFallback,
+			want: "internal<500000>: fallback message",
+		},
+		{
+			name: "kind and code only",
+			err:  catalog.errUserNotFound.WithMessage(""),
+			want: "not_found<404301>(params.id)",
+		},
+		{
+			name: "nil receiver",
+			err:  nil,
+			want: "",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got string
+			if tc.err != nil {
+				got = tc.err.Error()
+			} else {
+				var nilErr *errors.Error
+				got = nilErr.Error()
+			}
+			if got != tc.want {
+				t.Fatalf("Error() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWithSourceAndMessage(t *testing.T) {
+	catalog := newTestCatalog()
 
 	t.Run("WithSource copies without mutating original", func(t *testing.T) {
-		err := errors.New("not_found", "404301", "subscriber not found")
+		err := catalog.errUserNotFound
 		withSource := err.WithSource("params.id")
 		if withSource.Source != "params.id" {
 			t.Fatalf("unexpected source: %s", withSource.Source)
 		}
-		if err.Source != "" {
-			t.Fatal("original error should be unchanged")
+		if err.Source != "params.id" {
+			t.Fatal("original should keep catalog source")
 		}
 	})
 
 	t.Run("WithMessage copies without changing code", func(t *testing.T) {
-		err := errors.New("validation", "422301", "id is required", "body.id")
+		err := catalog.errIDRequired
 		withMessage := err.WithMessage("custom message")
 		if withMessage.Message != "custom message" {
 			t.Fatalf("unexpected message: %q", withMessage.Message)
@@ -167,8 +320,10 @@ func TestErrorsCollection(t *testing.T) {
 }
 
 func TestExtract(t *testing.T) {
+	catalog := newTestCatalog()
+
 	t.Run("AsErrors single catalog entry", func(t *testing.T) {
-		err := errors.New("validation", "422301", "external_id is required", "body.external_id")
+		err := catalog.errIDRequired
 		got := errors.AsErrors(err)
 		if len(got) != 1 || got[0].Code != "422301" {
 			t.Fatalf("unexpected result: %+v", got)
@@ -176,10 +331,7 @@ func TestExtract(t *testing.T) {
 	})
 
 	t.Run("AsErrors collection", func(t *testing.T) {
-		errs := errors.Errors{
-			errors.New("validation", "422301", "external_id is required", "body.external_id"),
-			errors.New("validation", "422302", "invalid email", "body.email"),
-		}
+		errs := errors.Errors{catalog.errIDRequired, catalog.errEmailInvalid}
 		if len(errors.AsErrors(errs)) != 2 {
 			t.Fatal("expected 2 errors")
 		}
@@ -205,7 +357,7 @@ func TestExtract(t *testing.T) {
 	})
 
 	t.Run("IsStructured", func(t *testing.T) {
-		if !errors.IsStructured(errors.New("validation", "422301", "required")) {
+		if !errors.IsStructured(catalog.errIDRequired) {
 			t.Fatal("expected catalog error to be structured")
 		}
 		if errors.IsStructured(errors.NewPlain("plain")) {
@@ -214,39 +366,8 @@ func TestExtract(t *testing.T) {
 	})
 }
 
-// buildHybridTree constructs:
-//
-//	siblings
-//	-> error1 -> error2 -> siblings { error21, error22 }
-//	-> error3 -> siblings { error4, error5 }
-//	-> error6
-func buildHybridTree() errors.Errors {
-	err21 := errors.New("validation", "422021", "error21")
-	err22 := errors.New("validation", "422022", "error22")
-	err2 := errors.New("internal", "500002", "error2")
-	err1 := errors.New("internal", "500001", "error1")
-
-	branch1 := errors.Wrap(
-		errors.Wrap(errors.Errors{err21, err22}, err2),
-		err1,
-	).(*errors.Error)
-
-	err4 := errors.New("validation", "422004", "error4")
-	err5 := errors.New("validation", "422005", "error5")
-	err3 := errors.New("internal", "500003", "error3")
-
-	branch2 := errors.Wrap(
-		errors.Errors{err4, err5},
-		err3,
-	).(*errors.Error)
-
-	err6 := errors.New("not_found", "404006", "error6")
-
-	return errors.Errors{branch1, branch2, err6}
-}
-
 func TestHybridTree(t *testing.T) {
-	hybrid := buildHybridTree()
+	hybrid, refs := buildHybridTree()
 
 	t.Run("AsErrors returns top-level branch heads only", func(t *testing.T) {
 		got := errors.AsErrors(hybrid)
@@ -260,14 +381,8 @@ func TestHybridTree(t *testing.T) {
 
 	t.Run("stdlib Is finds nested catalog entries", func(t *testing.T) {
 		targets := []*errors.Error{
-			errors.New("internal", "500001", "error1"),
-			errors.New("internal", "500002", "error2"),
-			errors.New("validation", "422021", "error21"),
-			errors.New("validation", "422022", "error22"),
-			errors.New("internal", "500003", "error3"),
-			errors.New("validation", "422004", "error4"),
-			errors.New("validation", "422005", "error5"),
-			errors.New("not_found", "404006", "error6"),
+			refs.err1, refs.err2, refs.err21, refs.err22,
+			refs.err3, refs.err4, refs.err5, refs.err6,
 		}
 		for _, target := range targets {
 			if !errors.Is(hybrid, target) {

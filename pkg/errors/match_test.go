@@ -15,11 +15,8 @@ func TestIsCatalog(t *testing.T) {
 		if !errors.Is(err, catalog.errUserNotFound) {
 			t.Fatal("expected Is to match catalog")
 		}
-		if errors.Is(err, errors.New("not_found", "404302", "order not found", "params.id")) {
+		if errors.Is(err, catalog.errOrderNotFound) {
 			t.Fatal("expected different code to not match")
-		}
-		if errors.Is(err, errors.New("validation", "404301", "wrong kind")) {
-			t.Fatal("expected different kind to not match")
 		}
 	})
 
@@ -36,8 +33,7 @@ func TestIsCatalog(t *testing.T) {
 			{"outer", catalog.errFetchUserFailed, true},
 			{"middle", catalog.errQueryFailed, true},
 			{"inner", catalog.errUserNotFound, true},
-			{"same code wrong kind", errors.New("validation", "500002", "wrong kind"), false},
-			{"same kind wrong code", errors.New("internal", "500999", "wrong code"), false},
+			{"same kind wrong code", catalog.errWrongCode, false},
 			{"different message same catalog", catalog.errFetchUserFailed.WithMessage("timeout"), true},
 		}
 
@@ -77,7 +73,7 @@ func TestIsCatalog(t *testing.T) {
 
 	t.Run("breadth inside depth", func(t *testing.T) {
 		errs := errors.Errors{catalog.errIDRequired, catalog.errEmailInvalid}
-		top := errors.Wrap(errs, errors.New("internal", "500000", "validation failed"))
+		top := errors.Wrap(errs, catalog.errValidationFail)
 		if !errors.Is(top, catalog.errEmailInvalid) {
 			t.Fatal("expected Is to find catalog entry inside Errors attached as cause")
 		}
@@ -127,7 +123,7 @@ func TestIsPlain(t *testing.T) {
 			errors.Wrap(dbErr, catalog.errQueryFailed).(*errors.Error),
 			catalog.errIDRequired,
 		}
-		top := errors.Wrap(errs, errors.New("internal", "500000", "validation failed"))
+		top := errors.Wrap(errs, catalog.errValidationFail)
 		if !errors.Is(top, dbErr) {
 			t.Fatal("expected Is to find plain error through wrap chain into Errors collection")
 		}

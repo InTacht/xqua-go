@@ -6,16 +6,19 @@
 // Config supplies service name, id, label, debug level, and request ID field
 // names for HTTP propagation:
 //
-//	log := logger.New(&logger.Config{
+//	appLog := logger.New(&logger.Config{
 //	    Name:  "orders",
 //	    ID:    "orders-api",
 //	    Label: "server",
 //	    Debug: true,
 //	})
-//	defer log.Close()
+//	defer appLog.Close() // root only
 //
-// Derive returns a child logger whose label is extended (parent.child) while
-// sharing the same underlying zap core.
+// Derive returns a child logger (as runtime.Logger) whose label is extended
+// (parent.child) while sharing the same underlying zap core. Children are
+// cheap; never Close them — only the root from New/FromZap is Closed. Use
+// Derive from unit factories to scope logs per component without holding the
+// concrete *Logger.
 //
 // # Logging methods
 //
@@ -45,12 +48,12 @@
 //
 //	Operation              Use when
 //	---------              --------
-//	New / FromZap          Create or wrap a logger
-//	Derive                 Scope logs to a sub-component label
+//	New / FromZap          Create or wrap a root logger
+//	Derive                 Scope logs to a sub-component label (shared core)
 //	ContextWithRequestID   Propagate request ID into ctx
 //	Debug/Info/Warn/Error  Log at a level
 //	*Ctx                   Same, with request_id from ctx
 //	*Wrap / ErrorWrap      Log and return (error levels return the error)
 //	Zap                    Access underlying zap for middleware
-//	Close                  Flush and shut down
+//	Close                  Flush the root only (not derived children)
 package logger

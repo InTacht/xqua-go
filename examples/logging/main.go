@@ -14,14 +14,28 @@ import (
 	"github.com/InTacht/xqua-go/pkg/logger"
 )
 
+var demoCatalog = errors.NewCatalog("logging-demo")
+
 var (
-	errQueryFailed  = errors.New("internal", "500001", "query failed")
-	errFetchFailed  = errors.New("internal", "500002", "fetch user failed")
-	errIDRequired   = errors.New("validation", "422301", "id is required", "body.id")
-	errEmailInvalid = errors.New("validation", "422302", "email is invalid", "body.email")
+	errQueryFailed = demoCatalog.Define(errors.Def{
+		Code: "1001", Message: "query failed",
+	})
+	errFetchFailed = demoCatalog.Define(errors.Def{
+		Code: "1002", Message: "fetch user failed",
+	})
+	errIDRequired = demoCatalog.Define(errors.Def{
+		Code: "2001", Message: "id is required", Source: "body.id",
+	})
+	errEmailInvalid = demoCatalog.Define(errors.Def{
+		Code: "2002", Message: "email is invalid", Source: "body.email",
+	})
+	errValidationFailed = demoCatalog.Define(errors.Def{
+		Code: "1000", Message: "validation failed",
+	})
 )
 
 func main() {
+	// Root logger only: New + Close. Derive children for labels; never Close them.
 	log := logger.New(&logger.Config{
 		Name:  "logging-demo",
 		ID:    "logging-demo",
@@ -82,30 +96,31 @@ func wrapOverCollection() error {
 		errIDRequired,
 		errEmailInvalid,
 	}
-	return errors.Wrap(errs, errors.New("internal", "500000", "validation failed"))
+	return errors.Wrap(errs, errValidationFailed)
 }
 
 func hybridTree() errors.Errors {
-	err21 := errors.New("validation", "422021", "error21")
-	err22 := errors.New("validation", "422022", "error22")
-	err2 := errors.New("internal", "500002", "error2")
-	err1 := errors.New("internal", "500001", "error1")
+	c := errors.NewCatalog("hybrid-demo")
+	err21 := c.Define(errors.Def{Code: "021", Message: "error21"})
+	err22 := c.Define(errors.Def{Code: "022", Message: "error22"})
+	err2 := c.Define(errors.Def{Code: "002", Message: "error2"})
+	err1 := c.Define(errors.Def{Code: "001", Message: "error1"})
 
 	branch1 := errors.Wrap(
 		errors.Wrap(errors.Errors{err21, err22}, err2),
 		err1,
 	).(*errors.Error)
 
-	err4 := errors.New("validation", "422004", "error4")
-	err5 := errors.New("validation", "422005", "error5")
-	err3 := errors.New("internal", "500003", "error3")
+	err4 := c.Define(errors.Def{Code: "004", Message: "error4"})
+	err5 := c.Define(errors.Def{Code: "005", Message: "error5"})
+	err3 := c.Define(errors.Def{Code: "003", Message: "error3"})
 
 	branch2 := errors.Wrap(
 		errors.Errors{err4, err5},
 		err3,
 	).(*errors.Error)
 
-	err6 := errors.New("not_found", "404006", "error6")
+	err6 := c.Define(errors.Def{Code: "006", Message: "error6"})
 
 	return errors.Errors{branch1, branch2, err6}
 }

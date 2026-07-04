@@ -8,6 +8,31 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+// Category-named catalogs preserve the Kind values asserted in these tests.
+var (
+	logInternalCat   = errors.NewCatalog("internal")
+	logValidationCat = errors.NewCatalog("validation")
+
+	logErrIDRequired = logValidationCat.Define(errors.Def{
+		Code: "422301", Message: "id required", Source: "body.id",
+	})
+	logErrEmailInvalid = logValidationCat.Define(errors.Def{
+		Code: "422302", Message: "email invalid", Source: "body.email",
+	})
+	logErrQueryFailed = logInternalCat.Define(errors.Def{
+		Code: "500001", Message: "database unavailable",
+	})
+	logErrFetchFailed = logInternalCat.Define(errors.Def{
+		Code: "500002", Message: "fetch user failed",
+	})
+	logErrQueryFailedNamed = logInternalCat.Define(errors.Def{
+		Code: "500011", Message: "query failed",
+	})
+	logErrValidationFailed = logInternalCat.Define(errors.Def{
+		Code: "500000", Message: "validation failed",
+	})
+)
+
 func TestErrorFields(t *testing.T) {
 	t.Run("nil error omits error fields", func(t *testing.T) {
 		log, recorded := newObservedLogger(t, nil, zapcore.ErrorLevel)
@@ -37,10 +62,7 @@ func TestErrorFields(t *testing.T) {
 
 	t.Run("Errors collection logs errors array", func(t *testing.T) {
 		log, recorded := newObservedLogger(t, nil, zapcore.ErrorLevel)
-		errs := errors.Errors{
-			errors.New("validation", "422301", "id required", "body.id"),
-			errors.New("validation", "422302", "email invalid", "body.email"),
-		}
+		errs := errors.Errors{logErrIDRequired, logErrEmailInvalid}
 		log.Error(errs, "validation failed")
 
 		items := errorsFieldObjects(t, recorded.AllUntimed()[0].ContextMap())
@@ -51,8 +73,7 @@ func TestErrorFields(t *testing.T) {
 
 	t.Run("single canonical error logs one-item errors array", func(t *testing.T) {
 		log, recorded := newObservedLogger(t, nil, zapcore.ErrorLevel)
-		err := errors.New("validation", "422301", "required", "body.id")
-		log.Error(err, "validation failed")
+		log.Error(logErrIDRequired, "validation failed")
 
 		errObj := firstErrorObject(t, recorded.AllUntimed()[0].ContextMap())
 		if errObj["source"] != "body.id" {
@@ -66,7 +87,7 @@ func TestErrorFields(t *testing.T) {
 	t.Run("wrapped error logs errors array with nested cause", func(t *testing.T) {
 		log, recorded := newObservedLogger(t, nil, zapcore.ErrorLevel)
 		cause := errors.NewPlain("connection reset")
-		err := errors.Wrap(cause, errors.New("internal", "500001", "database unavailable"))
+		err := errors.Wrap(cause, logErrQueryFailed)
 		log.Error(err, "query failed")
 
 		errObj := firstErrorObject(t, recorded.AllUntimed()[0].ContextMap())
@@ -81,9 +102,9 @@ func TestErrorFields(t *testing.T) {
 
 	t.Run("one layer per wrap logs outer error and immediate cause only", func(t *testing.T) {
 		log, recorded := newObservedLogger(t, nil, zapcore.ErrorLevel)
-		inner := errors.New("internal", "500001", "query failed")
+		inner := logErrQueryFailedNamed
 		middle := errors.Wrap(errors.NewPlain("connection reset"), inner)
-		err := errors.Wrap(middle, errors.New("internal", "500002", "fetch user failed"))
+		err := errors.Wrap(middle, logErrFetchFailed)
 		log.Error(err, "request failed")
 
 		errObj := firstErrorObject(t, recorded.AllUntimed()[0].ContextMap())
@@ -98,11 +119,8 @@ func TestErrorFields(t *testing.T) {
 
 	t.Run("wrap over Errors collection", func(t *testing.T) {
 		log, recorded := newObservedLogger(t, nil, zapcore.ErrorLevel)
-		errs := errors.Errors{
-			errors.New("validation", "422301", "id required", "body.id"),
-			errors.New("validation", "422302", "email invalid", "body.email"),
-		}
-		top := errors.Wrap(errs, errors.New("internal", "500000", "validation failed"))
+		errs := errors.Errors{logErrIDRequired, logErrEmailInvalid}
+		top := errors.Wrap(errs, logErrValidationFailed)
 		log.Error(top, "handler validation failed")
 
 		errObj := firstErrorObject(t, recorded.AllUntimed()[0].ContextMap())
@@ -119,8 +137,8 @@ func TestErrorFields(t *testing.T) {
 		log, recorded := newObservedLogger(t, nil, zapcore.ErrorLevel)
 		dbErr := errors.NewPlain("connection reset")
 		errs := errors.Errors{
-			errors.Wrap(dbErr, errors.New("internal", "500001", "query failed")).(*errors.Error),
-			errors.New("validation", "422301", "id required", "body.id"),
+			errors.Wrap(dbErr, logErrQueryFailedNamed).(*errors.Error),
+			logErrIDRequired,
 		}
 		log.Error(errs, "failures")
 
@@ -139,8 +157,8 @@ func TestErrorFields(t *testing.T) {
 	t.Run("trace across separate log lines", func(t *testing.T) {
 		log, recorded := newObservedLogger(t, nil, zapcore.ErrorLevel)
 		dbErr := errors.NewPlain("connection reset by peer")
-		repoErr := errors.Wrap(dbErr, errors.New("internal", "500001", "query failed"))
-		serviceErr := errors.Wrap(repoErr, errors.New("internal", "500002", "fetch user failed"))
+		repoErr := errors.Wrap(dbErr, logErrQueryFailedNamed)
+		serviceErr := errors.Wrap(repoErr, logErrFetchFailed)
 
 		log.Error(repoErr, "repository query failed")
 		log.Error(serviceErr, "service fetch failed")
@@ -151,7 +169,7 @@ func TestErrorFields(t *testing.T) {
 		}
 
 		repoObj := firstErrorObject(t, entries[0].ContextMap())
-		if repoObj["code"] != "500001" || repoObj["cause"] != dbErr.Error() {
+		if repoObj["code"] != "500011" || repoObj["cause"] != dbErr.Error() {
 			t.Fatalf("unexpected repo layer: %#v", repoObj)
 		}
 

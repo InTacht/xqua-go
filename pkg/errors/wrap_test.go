@@ -56,7 +56,7 @@ func TestCause(t *testing.T) {
 
 	t.Run("wrap over Errors collection", func(t *testing.T) {
 		errs := errors.Errors{catalog.errIDRequired, catalog.errEmailInvalid}
-		top := errors.Wrap(errs, errors.New("internal", "500000", "validation failed"))
+		top := errors.Wrap(errs, catalog.errValidationFail)
 		cause, ok := errors.Cause(top).(errors.Errors)
 		if !ok || len(cause) != 2 {
 			t.Fatalf("expected Errors as immediate cause, got %T", errors.Cause(top))
