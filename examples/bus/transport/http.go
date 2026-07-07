@@ -1,12 +1,14 @@
 package transport
 
 import (
-	"errors"
+	"context"
+	stderrors "errors"
 
 	"github.com/InTacht/xqua-go/examples/bus/worker"
 	"github.com/InTacht/xqua-go/pkg/bus"
 	xerrors "github.com/InTacht/xqua-go/pkg/errors"
 	"github.com/InTacht/xqua-go/pkg/http"
+	"github.com/InTacht/xqua-go/pkg/http/openapi"
 	"github.com/InTacht/xqua-go/pkg/runtime"
 
 	"github.com/gofiber/fiber/v3"
@@ -29,8 +31,6 @@ var (
 	})
 )
 
-// Deps is the subset of process state the HTTP unit needs. main narrows the
-// app context at registration; this package never imports it.
 type Deps struct {
 	Name string
 	Host string
@@ -38,53 +38,87 @@ type Deps struct {
 	Bus  bus.Bus
 }
 
-// HTTP builds the HTTP unit. POST /work and GET /work?q= request work over the bus.
+type workIn struct {
+	Q string `query:"q"`
+}
+
+type workOut struct {
+	openapi.Response
+	Data struct {
+		Result string `json:"result"`
+	} `json:"data"`
+}
+
 func HTTP(d Deps, log runtime.Logger) runtime.Unit {
-	return http.New(http.Config{
+	t := http.New(http.Config{
 		Host:        d.Host,
 		Port:        d.Port,
 		Logger:      log,
 		Catalog:     catalog,
 		FiberConfig: fiber.Config{ServerHeader: d.Name},
-	}).Routes("/", func(r *http.Router) {
-		r.Get("/work", doWork(d.Bus, log))
-		r.Post("/work", doWork(d.Bus, log))
 	})
+	openapi.New(t, openapi.Config{
+		Specs: []openapi.Spec{{Path: "/openapi.json", Title: d.Name}},
+	}).Routes("/", func(r *openapi.Router) {
+		r.Route("/work").
+			Get(openapi.Route{
+				Handler:   doWork(d.Bus, log),
+				Summary:   "Run work over the bus (GET)",
+				Responses: openapi.Returns().Err(422, errQueryRequired).Err(500, errNoWorkers, errWorkTimeout, errWorkFailed),
+			}).
+			Post(openapi.Route{
+				Handler:   doWorkPost(d.Bus, log),
+				Summary:   "Run work over the bus (POST)",
+				Responses: openapi.Returns().Err(422, errQueryRequired).Err(500, errNoWorkers, errWorkTimeout, errWorkFailed),
+			})
+	})
+	return t
 }
 
-func doWork(b bus.Bus, log runtime.Logger) fiber.Handler {
-	return func(c fiber.Ctx) error {
-		q := c.Query("q")
-		if q == "" {
-			q = string(c.Body())
+func doWork(b bus.Bus, log runtime.Logger) func(context.Context, workIn) (workOut, error) {
+	return func(ctx context.Context, in workIn) (workOut, error) {
+		if in.Q == "" {
+			return workOut{}, errQueryRequired
 		}
-		if q == "" {
-			return errQueryRequired
-		}
-
-		reply, err := b.Request(c.Context(), bus.Message{
-			Subject: worker.SubjectWork,
-			Data:    []byte(q),
-		})
-		if err != nil {
-			log.ErrorCtx(c.Context(), err, "work request failed")
-			return mapBusErr(err)
-		}
-
-		return http.RES(c).
-			Message("work complete").
-			Data("result", string(reply.Data)).
-			Ok()
+		return runWork(ctx, b, log, in.Q)
 	}
+}
+
+func doWorkPost(b bus.Bus, log runtime.Logger) func(context.Context, workBodyIn) (workOut, error) {
+	return func(ctx context.Context, in workBodyIn) (workOut, error) {
+		if in.Q == "" {
+			return workOut{}, errQueryRequired
+		}
+		return runWork(ctx, b, log, in.Q)
+	}
+}
+
+type workBodyIn struct {
+	Q string `json:"q"`
+}
+
+func runWork(ctx context.Context, b bus.Bus, log runtime.Logger, q string) (workOut, error) {
+	reply, err := b.Request(ctx, bus.Message{
+		Subject: worker.SubjectWork,
+		Data:    []byte(q),
+	})
+	if err != nil {
+		log.ErrorCtx(ctx, err, "work request failed")
+		return workOut{}, mapBusErr(err)
+	}
+	var out workOut
+	out.Message = "work complete"
+	out.Data.Result = string(reply.Data)
+	return out, nil
 }
 
 func mapBusErr(err error) error {
 	switch {
-	case errors.Is(err, bus.ErrNoResponders):
+	case stderrors.Is(err, bus.ErrNoResponders):
 		return errNoWorkers
-	case errors.Is(err, bus.ErrTimeout):
+	case stderrors.Is(err, bus.ErrTimeout):
 		return errWorkTimeout
-	case errors.Is(err, bus.ErrClosed):
+	case stderrors.Is(err, bus.ErrClosed):
 		return errWorkFailed
 	default:
 		return errWorkFailed

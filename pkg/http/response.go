@@ -21,6 +21,12 @@ const (
 	statusError   = "error"
 )
 
+// EnvelopeVersion identifies the JSON response envelope contract. It is bumped
+// when the wire shape of the envelope changes; the openapi engine embeds it in
+// generated documents (x-xqua-envelope-version) so downstream code generators
+// can pin to a known envelope layout.
+const EnvelopeVersion = "1"
+
 // ErrorDetail is the JSON wire shape of a single API error entry.
 type ErrorDetail struct {
 	Kind    string `json:"kind"`
@@ -51,7 +57,7 @@ func ErrorDetailFrom(err *errors.Error) ErrorDetail {
 // responses stay HTTP 200 unless an explicit Status is set. Route wrappers
 // (Router) resolve semantic status from returned catalog errors.
 type Response struct {
-	ctx fiber.Ctx
+	ctx Ctx
 
 	requestID       string
 	clientRequestID string
@@ -94,7 +100,7 @@ type envelope struct {
 }
 
 // RES starts building a response for a Fiber request.
-func RES(c fiber.Ctx) *Response {
+func RES(c Ctx) *Response {
 	return &Response{
 		ctx:             c,
 		requestID:       requestid.FromContext(c),

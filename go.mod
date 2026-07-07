@@ -3,9 +3,12 @@ module github.com/InTacht/xqua-go
 go 1.26.4
 
 require (
+	github.com/goccy/go-yaml v1.19.2
 	github.com/gofiber/fiber/v3 v3.3.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/stretchr/testify v1.11.1
 	go.uber.org/zap v1.28.0
+	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
@@ -22,6 +25,7 @@ require (
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/rogpeppe/go-internal v1.15.0 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.71.0 // indirect

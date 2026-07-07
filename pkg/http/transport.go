@@ -14,7 +14,12 @@ import (
 	"github.com/gofiber/fiber/v3/middleware/requestid"
 )
 
-// Transport is an HTTP transport powered by Fiber v3.
+// Transport is an HTTP transport powered by Fiber v3. It is protocol-neutral:
+// it owns the Fiber app, middleware, operational endpoints, the RES envelope,
+// and the global error handler bound to the service's public catalog. REST
+// routing and OpenAPI generation live in the pkg/http/openapi engine, which
+// attaches to a transport via openapi.New(t, ...) and reads the accessors
+// below. Future engines (websocket, graphql, ...) follow the same pattern.
 type Transport struct {
 	host string
 	port int
@@ -24,10 +29,8 @@ type Transport struct {
 	catalog       *errors.Catalog
 	fallbacks     Fallbacks
 	defaultStatus int
-	kindStatuses  KindStatuses
 	healthCheck   func(ctx context.Context) error
 	build         buildInfo
-	rec           *recorder
 }
 
 // buildInfo carries the values surfaced by GET /version.
@@ -60,10 +63,8 @@ func New(cfg Config) *Transport {
 		catalog:       cfg.Catalog,
 		fallbacks:     cfg.Fallbacks,
 		defaultStatus: cfg.DefaultStatus,
-		kindStatuses:  resolveKindStatuses(cfg.KindStatuses),
 		healthCheck:   cfg.HealthCheck,
 		build:         buildInfo{Version: cfg.Version, BuildID: cfg.BuildID, BuildTime: cfg.BuildTime},
-		rec:           &recorder{},
 	}
 
 	t.installMiddleware(resolveMiddleware(cfg.Middleware))
@@ -71,33 +72,40 @@ func New(cfg Config) *Transport {
 	return t
 }
 
-// Manifest returns the transport's registration-time bookkeeping: every route
-// registered so far (with resolved per-error HTTP status), the full public
-// catalog, and the envelope version. It is pure data for future OpenAPI/TS
-// generation; call it after all routes are registered.
-func (t *Transport) Manifest() Manifest {
-	return Manifest{
-		EnvelopeVersion: EnvelopeVersion,
-		Routes:          t.rec.snapshot(),
-		Catalog:         catalogSpecs(t.catalog, t.kindStatuses, t.defaultStatus),
-	}
-}
-
 // Name identifies the transport implementation.
 func (t *Transport) Name() string {
 	return "http"
 }
 
-// Fiber returns the underlying Fiber application for route registration.
+// Fiber returns the underlying Fiber application. It is the single extension
+// point: engines (openapi, and future websocket/graphql) and any custom
+// handlers register on it directly.
 func (t *Transport) Fiber() *fiber.App {
 	return t.app
 }
 
-// Routes registers routes under a path prefix. The Router passed to register
-// wraps handlers so returned catalog errors are mapped to HTTP status codes.
-func (t *Transport) Routes(path string, register func(r *Router)) *Transport {
-	register(newRouter(t.app.Group(path), t.catalog, t.kindStatuses, t.defaultStatus, path, t.rec))
-	return t
+// Catalog returns the service's public error catalog — the one wire contract
+// the global error handler enforces. Engines read it to map declared errors to
+// their protocol representation.
+func (t *Transport) Catalog() *errors.Catalog {
+	return t.catalog
+}
+
+// Logger returns the transport's logger. Engines derive sub-loggers from it.
+func (t *Transport) Logger() runtime.Logger {
+	return t.log
+}
+
+// Version returns Config.Version. Engines use it as the default document
+// version (e.g. OpenAPI info.version) when a spec does not set its own.
+func (t *Transport) Version() string {
+	return t.build.Version
+}
+
+// DefaultStatus returns the HTTP status the global error handler uses for
+// plain and unmapped errors. Engines fall back to it when a kind has no mapping.
+func (t *Transport) DefaultStatus() int {
+	return t.defaultStatus
 }
 
 // Serve starts the HTTP server and blocks until Shutdown is called or an error occurs.

@@ -12,8 +12,8 @@
 // across catalogs and matched with IsKind. It defaults to the catalog name.
 // The standard kind constants (KindValidation, KindNotFound, KindConflict,
 // KindUnauthorized, KindForbidden, KindRateLimit, KindInternal) are the
-// conventional categories the HTTP transport can resolve default statuses from
-// (see http.DefaultKindStatuses); custom kinds remain fully supported.
+// conventional categories the openapi engine can resolve default statuses from
+// (see openapi.DefaultKindStatuses); custom kinds remain fully supported.
 //
 // The package is transport-agnostic. HTTP status codes are decided where an
 // error is surfaced (route mappings), not on the error itself. Only a
@@ -56,8 +56,10 @@
 //     first even for structured errors, so internal catalog entries can be
 //     re-mapped to public catalog entries (match with Is inside the mapper).
 //     Unmatched structured errors pass through unchanged.
-//   - Or wraps unstructured errors with a catalog fallback entry.
-//   - MapOr tries Map first, then Or with the fallback.
+//   - Or wraps unstructured errors with a catalog fallback entry. Structured
+//     errors pass through unchanged.
+//   - MapOr tries mappers first, then wraps with the fallback when none match —
+//     including for structured internal catalog errors at HTTP/store boundaries.
 //
 // Pair and Mappers are combinators that make boundary mapping declarative:
 // Pair(from, to) is a Mapper that translates errors matching from (by Is) to

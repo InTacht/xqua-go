@@ -12,7 +12,8 @@ The library is **stateless and config-first**: it does not read environment vari
 | `pkg/logger` | Structured zap logging with canonical error fields |
 | `pkg/errors` | Catalog-driven canonical errors, wrapping, and conversion |
 | `pkg/env` | Typed environment lookups (`String`/`Int`/`Bool`/`MustString`) and struct `Bind` for program `main` |
-| `pkg/http` | Headless HTTP stack (Fiber v3), middleware, JSON API envelope; implements `runtime.Unit` |
+| `pkg/http` | Headless HTTP stack (Fiber v3), middleware, JSON RES envelope, and `runtime.Unit` |
+| `pkg/http/openapi` | Declarative OpenAPI 3.2 engine: typed handlers, path-first registration, generated specs |
 | `pkg/bus` | Inter-unit message bus (local today; same API for a future cluster backend) |
 | `pkg/migrate` | SQL migrations with a multi-replica startup gate (`migrate.Postgres`) |
 
@@ -27,16 +28,27 @@ func run() error {
     appLog := logger.New(&logger.Config{Name: "orders", ID: "orders-api"})
     defer appLog.Close() // root only; never Close log.Derive(...) children
 
-    // No shared deps yet — pass struct{}{}. See examples/api for a real context.
     r, err := runtime.New(struct{}{}, appLog)
     if err != nil { return err }
 
     catalog := errors.NewCatalog("orders")
     r.Unit(func(_ struct{}, log runtime.Logger) runtime.Unit {
-        return http.New(http.Config{Logger: log.Derive("http"), Catalog: catalog}).
-            Routes("/api/v1", func(r *http.Router) {
-                r.Get("/orders/:id", getOrder) // kind→status defaults apply
+        t := http.New(http.Config{Logger: log.Derive("http"), Catalog: catalog})
+        api := openapi.New(t, openapi.Config{
+            Specs: []openapi.Spec{{Path: "/openapi.json", Title: "Orders API"}},
+        })
+        api.Routes("/api/v1", func(r *openapi.Router) {
+            users := r.Group(openapi.GroupConfig{
+                Prefix:    "/users",
+                Responses: openapi.Returns().Err(422, errValidation),
             })
+            users.Route("/:id").Get(openapi.Route{
+                Handler:   getOrder,
+                Summary:   "Fetch one order",
+                Responses: openapi.Returns().Err(404, errNotFound),
+            })
+        })
+        return t
     })
     return r.Run()
 }
@@ -96,43 +108,50 @@ log.Error(err, "fetch user failed")
 
 `Config.Catalog` declares the service's **public error contract**: the only errors allowed to cross the wire. Internal catalog errors (e.g. from a `store` package) must be mapped into it at the boundary with `errors.MapOr` — this forces you to be deterministic about what your service handles and what it resurfaces. If an internal error slips through, the transport replaces it with `Fallbacks.Unhandled` (logged with the full chain, never leaked).
 
-Handlers **return public catalog errors**; the route resolves the HTTP status. Success responses (and bare error envelopes) use **HTTP 200**.
+Handlers **return public catalog errors**; declared routes resolve HTTP status from `Responses.Err(status, ...)`. Success is always **HTTP 200**.
 
-Status resolution has three tiers (highest priority first):
-
-1. an explicit per-route/group `http.Status` / `http.Statuses` mapping;
-2. the **kind→status table** — `Config.KindStatuses`, defaulting to `http.DefaultKindStatuses()`: `validation`→422, `not_found`→404, `conflict`→409, `unauthorized`→401, `forbidden`→403, `rate_limit`→429, `internal`→500;
-3. `Config.DefaultStatus` for unknown kinds.
-
-Because kinds carry sensible defaults, **most routes need no explicit `Status` options** — add them only to override.
+The OpenAPI engine uses typed handlers:
 
 ```go
-Routes("/api/v1", func(r *http.Router) {
-    // No status options needed: errUserNotFound (kind not_found) → 404,
-    // errIDRequired (kind validation) → 422, all from the kind table.
-    r.Get("/users/:id", getUser)
-
-    // Override a kind default only when you need to.
-    r.Post("/users", createUser, http.Status(api.ErrConflict, fiber.StatusConflict))
-})
-
-func getUser(c fiber.Ctx) error {
-    id, err := http.ParamInt64(c, "id") // sentinel http.ErrInvalidParam on failure
-    if err != nil {
-        return api.ErrIDRequired // kind validation → 422
-    }
-    user, err := svc.FetchUser(c.Context(), id)
-    if err != nil {
-        // boundary: internal store errors → public api errors
-        return errors.MapOr(err, api.ErrInternal,
-            errors.Pair(store.ErrUserMissing, api.ErrUserNotFound), // → 404
-        )
-    }
-    return http.RES(c).Message("ok").Data("user", user).Ok() // 200
-}
+func getOrder(ctx context.Context, in getOrderIn) (orderOut, error) { ... }
 ```
 
-Only public-catalog entries are accepted in `Status`/`Statuses`; foreign entries panic at startup. When several catalog errors are returned together, the route uses the **highest** resolved status (e.g. `500 > 422`). For full control, `http.OnError(func(c, err) error)` handles the error itself. Anything that is not a public-catalog error (plain errors, internal catalog errors) bubbles to the global handler.
+Bind tags on the input struct (`path`, `query`, `header`, `cookie`, `json`, `form`) populate `in` before the handler runs. Bind failures return **422** using catalog entries declared under `Responses.Err(422, ...)` (merged from group + route). Handlers that anonymous-embed `openapi.Response` receive transport-owned envelope fields on success; other return types are marshaled as raw JSON.
+
+Status resolution for handler errors:
+
+1. an explicit `Responses.Err(status, catalogEntry)` on the route or group;
+2. if undeclared or non-catalog, the error bubbles to the transport global handler.
+
+When several catalog errors are returned together on a declared route, the **highest** declared status wins. Only public-catalog entries are accepted in `Responses.Err(...)`; foreign entries panic at registration.
+
+```go
+api.Routes("/api/v1", func(r *openapi.Router) {
+    users := r.Group(openapi.GroupConfig{
+        Prefix:    "/users",
+        Responses: openapi.Returns().Err(422, api.ErrValidation),
+    })
+    users.Route("/:id").Get(openapi.Route{
+        Handler:   getUser,
+        Summary:   "Fetch one user",
+        Responses: openapi.Returns().
+            Err(404, api.ErrUserNotFound).
+            Err(500, api.ErrFetchUser),
+    })
+    users.Route("/upload").Post(openapi.Route{
+        Handler:   uploadAsset,
+        Summary:   "Upload an asset",
+        Requests: []openapi.ContentUnit{{
+            Required:    true,
+            ContentType: "multipart/form-data",
+            Structure:   uploadIn{}, // or &openapi.Schema{Ref: "..."}
+        }},
+        Responses: openapi.Returns().Err(422, api.ErrValidation),
+    })
+})
+```
+
+Imperative Fiber handlers (streaming, health demos, legacy paths) register on `Transport.Fiber()` or `Router.Fiber()` and are never included in OpenAPI output.
 
 ## HTTP middleware
 
@@ -151,9 +170,33 @@ The global error handler backs four cases with required config: unmatched routes
 - **`GET /version`** returns `Config.Version` / `BuildID` / `BuildTime` (empty fields omitted).
 - Sensible Fiber **read/write timeouts and a body-size limit** are applied by default and overridable via `Config.FiberConfig`.
 
-## Manifest
+## Manifest & OpenAPI
 
-`Transport.Manifest()` returns registration-time bookkeeping — every route with its resolved per-error HTTP status, the full public catalog, and the envelope version (`http.EnvelopeVersion`) — as pure data for future OpenAPI/TypeScript generation.
+Attach the engine with `openapi.New(t, cfg)` and register routes with `api.Routes(prefix, ...)`. `Generator.Manifest()` returns registration-time bookkeeping — every route with operation metadata, named path parameters, declared errors (each with its resolved HTTP status), plus the full public catalog and envelope version — as pure data for contract tooling.
+
+`Generator.Document(spec)` renders an OpenAPI 3.2 document from the manifest. The same code path powers the served spec endpoints. Declared errors become responses under their resolved statuses (described from the catalog, machine-readable under `x-xqua-errors`), and the RES envelope is modeled once as component schemas (`Envelope`, `ErrorEnvelope`, `ErrorDetail`, `Pagination`, `Cursor`).
+
+`openapi.Config.Specs` declares the documents the engine serves; each is auto-registered as a GET endpoint. A `nil` slice serves one document at `/openapi.json`; an empty (non-nil) slice serves none. Each `openapi.Spec` filters the manifest by path `Prefix` (segment-aware) and membership tags (`Route.Specs`), so one transport can publish several surfaces at once:
+
+```go
+t := http.New(http.Config{Logger: log, Catalog: apiCatalog})
+api := openapi.New(t, openapi.Config{
+    Specs: []openapi.Spec{
+        {Path: "/openapi.json", Prefix: "/api/v1", Title: "Public API"},
+        {Path: "/mobile/openapi.json", Prefix: "/mobile", Title: "Mobile API"},
+        {Path: "/console/openapi.json", Prefix: "/console", Title: "Console API"},
+    },
+})
+```
+
+Request/response schemas are inferred from handler `In`/`Out` types (struct tags) or declared explicitly on `Route.Request` / `Route.Requests` / `Returns(T{})`. Multipart uploads bind at runtime when input fields use `form` tags with `*multipart.FileHeader`, `[]*multipart.FileHeader`, or `multipart.File`.
+
+OpenAPI **3.2** extras:
+
+- **Streaming** — `Route.Extra` with `ResponseDecl.ItemBody` for SSE/WebSocket docs; live streaming uses `Router.Fiber()`.
+- **QUERY** — `Route(path).Query(...)` registers the HTTP QUERY method.
+- **Device OAuth** — `Spec.SecuritySchemes` / `Security` support `oauth2` with `flows.deviceAuthorization`.
+- **Multipart** — `Route.Requests` with `ContentType: "multipart/form-data"` and optional `Encoding` per part.
 
 ## Configuration from the environment
 
@@ -213,27 +256,26 @@ Keep construction and `defer` inside a `run() error` function and return errors 
 
 ## Examples
 
-Guided platter (read in order): [`examples/README.md`](examples/README.md).
+Guided platter: [`examples/README.md`](examples/README.md) — start with `hello`, then `showcase` for the full HTTP/OpenAPI surface.
 
 ```bash
 go run ./examples/hello
-go run ./examples/catalog
+make dev-up && go run ./examples/showcase
 go run ./examples/multiport
 go run ./examples/bus
 go run ./examples/split
-make dev-up && go run ./examples/api
+make dev-up && go run ./examples/showcase
 go run ./examples/logging
 ```
 
 | Example | Shows |
 |---------|--------|
-| `hello` | Minimal runtime + one HTTP unit, catalog fallbacks, RES envelope |
-| `catalog` | Public catalog, kind→status, internal errors never leak, `Pair` / validation collections |
-| `multiport` | Several units in one process (public `:8080` + admin `:8081`) |
-| `bus` | Local bus: HTTP request/replies to competing worker units on `demo.work` |
-| `split` | Compute (HTTP) and storage as separate units; talk only over the bus |
-| `api` | Postgres, SQL migrations, hooks, store boundary mapping |
-| `logging` | Structured error logging alone (no HTTP) |
+| `hello` | Minimal runtime + typed handler + `/openapi.json` |
+| `showcase` | Postgres users, demo routes, multipart, multi-surface OpenAPI, catalog discipline |
+| `multiport` | Two HTTP units on `:8080` and `:8081` in one process |
+| `bus` | Local bus with competing queue workers |
+| `split` | HTTP compute unit + storage unit over bus only |
+| `logging` | Structured error logging without HTTP |
 
 ## Feedback-driven development
 

@@ -36,7 +36,7 @@ var (
 
 func TestSuccessEnvelope(t *testing.T) {
 	app := fiber.New()
-	app.Get("/", func(c fiber.Ctx) error {
+	app.Get("/", func(c http.Ctx) error {
 		return http.RES(c).
 			Message("Subscriber upserted").
 			Data("subscriber", map[string]any{"id": "sub_1"}).
@@ -69,7 +69,7 @@ func TestSuccessEnvelope(t *testing.T) {
 
 func TestErrorEnvelope(t *testing.T) {
 	app := fiber.New()
-	app.Get("/", func(c fiber.Ctx) error {
+	app.Get("/", func(c http.Ctx) error {
 		return http.RES(c).
 			Message("validation failed").
 			Error(errValidation).
@@ -113,7 +113,7 @@ func TestErrorEnvelope(t *testing.T) {
 
 func TestErrorEnvelopeWithCause(t *testing.T) {
 	app := fiber.New()
-	app.Get("/", func(c fiber.Ctx) error {
+	app.Get("/", func(c http.Ctx) error {
 		cause := errors.NewPlain("connection reset")
 		err := errors.Wrap(cause, errInternal)
 		return http.RES(c).Error(errors.AsErrors(err)[0]).Status(500).Ok()
@@ -147,7 +147,7 @@ func TestErrorEnvelopeWithCause(t *testing.T) {
 
 func TestErrorEnvelopeImmediateCauseOnly(t *testing.T) {
 	app := fiber.New()
-	app.Get("/", func(c fiber.Ctx) error {
+	app.Get("/", func(c http.Ctx) error {
 		inner := errors.NewPlain("db timeout")
 		middle := errors.Wrap(inner, errInternalMiddle)
 		outer := errors.Wrap(middle, errInternalOuter)
@@ -182,7 +182,7 @@ func TestErrorEnvelopeImmediateCauseOnly(t *testing.T) {
 
 func TestApplyErrorsCollection(t *testing.T) {
 	app := fiber.New()
-	app.Get("/", func(c fiber.Ctx) error {
+	app.Get("/", func(c http.Ctx) error {
 		errs := errors.Errors{errValidation, errMultiValidation}
 		return http.RES(c).Message("validation failed").ApplyErrors(errs).Status(422).Ok()
 	})
@@ -200,7 +200,7 @@ func TestApplyErrorsCollection(t *testing.T) {
 
 func TestErrorEnvelopeDefaultsToHTTP200(t *testing.T) {
 	app := fiber.New()
-	app.Get("/", func(c fiber.Ctx) error {
+	app.Get("/", func(c http.Ctx) error {
 		return http.RES(c).Message("soft failure").Error(errSoftFailure).Ok()
 	})
 

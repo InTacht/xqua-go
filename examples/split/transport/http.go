@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"encoding/json"
 	stderrors "errors"
 
@@ -8,6 +9,7 @@ import (
 	"github.com/InTacht/xqua-go/pkg/bus"
 	"github.com/InTacht/xqua-go/pkg/errors"
 	"github.com/InTacht/xqua-go/pkg/http"
+	"github.com/InTacht/xqua-go/pkg/http/openapi"
 	"github.com/InTacht/xqua-go/pkg/runtime"
 
 	"github.com/gofiber/fiber/v3"
@@ -30,8 +32,6 @@ var (
 	})
 )
 
-// Deps is the subset of process state the HTTP unit needs. main narrows the
-// app context at registration; this package never imports it.
 type Deps struct {
 	Name string
 	Host string
@@ -39,37 +39,70 @@ type Deps struct {
 	Bus  bus.Bus
 }
 
-// HTTP is the compute edge: it never holds storage state, only the bus.
-//
-//	curl http://127.0.0.1:8080/kv/greeting
-//	curl -X PUT -d 'world' http://127.0.0.1:8080/kv/greeting
+type kvKeyIn struct {
+	Key string `path:"key"`
+}
+
+type kvPutIn struct {
+	Key   string `path:"key"`
+	Value string `json:"value"`
+}
+
+type kvEntryOut struct {
+	openapi.Response
+	Data struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	} `json:"data"`
+}
+
+type kvStoredOut struct {
+	openapi.Response
+	Data struct {
+		Key string `json:"key"`
+		OK  bool   `json:"ok"`
+	} `json:"data"`
+}
+
 func HTTP(d Deps, log runtime.Logger) runtime.Unit {
-	return http.New(http.Config{
+	t := http.New(http.Config{
 		Host:        d.Host,
 		Port:        d.Port,
 		Logger:      log,
 		Catalog:     catalog,
 		FiberConfig: fiber.Config{ServerHeader: d.Name},
-	}).Routes("/", func(r *http.Router) {
-		r.Get("/kv/:key", getKey(d.Bus, log))
-		r.Put("/kv/:key", putKey(d.Bus, log))
 	})
+	openapi.New(t, openapi.Config{
+		Specs: []openapi.Spec{{Path: "/openapi.json", Title: d.Name}},
+	}).Routes("/", func(r *openapi.Router) {
+		r.Route("/kv/:key").
+			Get(openapi.Route{
+				Handler:   getKey(d.Bus, log),
+				Summary:   "Fetch a key",
+				Responses: openapi.Returns().Err(422, errKeyRequired).Err(404, errNotFound).Err(500, errStorage),
+			}).
+			Put(openapi.Route{
+				Handler:   putKey(d.Bus, log),
+				Summary:   "Store a key",
+				Responses: openapi.Returns().Err(422, errKeyRequired, errValueRequired).Err(500, errStorage),
+			})
+	})
+	return t
 }
 
-func getKey(b bus.Bus, log runtime.Logger) fiber.Handler {
-	return func(c fiber.Ctx) error {
-		key := c.Params("key")
-		if key == "" {
-			return errKeyRequired
+func getKey(b bus.Bus, log runtime.Logger) func(context.Context, kvKeyIn) (kvEntryOut, error) {
+	return func(ctx context.Context, in kvKeyIn) (kvEntryOut, error) {
+		if in.Key == "" {
+			return kvEntryOut{}, errKeyRequired
 		}
-		payload, err := json.Marshal(map[string]string{"key": key})
+		payload, err := json.Marshal(map[string]string{"key": in.Key})
 		if err != nil {
-			return errStorage
+			return kvEntryOut{}, errStorage
 		}
-		reply, err := b.Request(c.Context(), bus.Message{Subject: storage.SubjectGet, Data: payload})
+		reply, err := b.Request(ctx, bus.Message{Subject: storage.SubjectGet, Data: payload})
 		if err != nil {
-			log.ErrorCtx(c.Context(), err, "storage get failed")
-			return mapBusErr(err)
+			log.ErrorCtx(ctx, err, "storage get failed")
+			return kvEntryOut{}, mapBusErr(err)
 		}
 		var res struct {
 			Key   string `json:"key"`
@@ -77,42 +110,48 @@ func getKey(b bus.Bus, log runtime.Logger) fiber.Handler {
 			Found bool   `json:"found"`
 		}
 		if err := json.Unmarshal(reply.Data, &res); err != nil {
-			return errStorage
+			return kvEntryOut{}, errStorage
 		}
 		if !res.Found {
-			return errNotFound
+			return kvEntryOut{}, errNotFound
 		}
-		return http.RES(c).Message("ok").Data("entry", res).Ok()
+		var out kvEntryOut
+		out.Message = "ok"
+		out.Data.Key = res.Key
+		out.Data.Value = res.Value
+		return out, nil
 	}
 }
 
-func putKey(b bus.Bus, log runtime.Logger) fiber.Handler {
-	return func(c fiber.Ctx) error {
-		key := c.Params("key")
-		if key == "" {
-			return errKeyRequired
+func putKey(b bus.Bus, log runtime.Logger) func(context.Context, kvPutIn) (kvStoredOut, error) {
+	return func(ctx context.Context, in kvPutIn) (kvStoredOut, error) {
+		if in.Key == "" {
+			return kvStoredOut{}, errKeyRequired
 		}
-		value := string(c.Body())
-		if value == "" {
-			return errValueRequired
+		if in.Value == "" {
+			return kvStoredOut{}, errValueRequired
 		}
-		payload, err := json.Marshal(map[string]string{"key": key, "value": value})
+		payload, err := json.Marshal(map[string]string{"key": in.Key, "value": in.Value})
 		if err != nil {
-			return errStorage
+			return kvStoredOut{}, errStorage
 		}
-		reply, err := b.Request(c.Context(), bus.Message{Subject: storage.SubjectPut, Data: payload})
+		reply, err := b.Request(ctx, bus.Message{Subject: storage.SubjectPut, Data: payload})
 		if err != nil {
-			log.ErrorCtx(c.Context(), err, "storage put failed")
-			return mapBusErr(err)
+			log.ErrorCtx(ctx, err, "storage put failed")
+			return kvStoredOut{}, mapBusErr(err)
 		}
 		var res struct {
 			Key string `json:"key"`
 			OK  bool   `json:"ok"`
 		}
 		if err := json.Unmarshal(reply.Data, &res); err != nil {
-			return errStorage
+			return kvStoredOut{}, errStorage
 		}
-		return http.RES(c).Message("stored").Data("entry", res).Ok()
+		var out kvStoredOut
+		out.Message = "stored"
+		out.Data.Key = res.Key
+		out.Data.OK = res.OK
+		return out, nil
 	}
 }
 

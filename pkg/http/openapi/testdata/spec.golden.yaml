@@ -1,0 +1,322 @@
+openapi: 3.2.0
+$self: https://api.example.com/openapi.json
+info:
+  title: Spec Test API
+  summary: Contract for the spec-test transport
+  version: 1.2.3
+jsonSchemaDialect: https://spec.openapis.org/oas/3.2/dialect/2025-09-17
+servers:
+  - url: https://api.example.com
+paths:
+  /api/v1/users:
+    post:
+      summary: Create a user
+      description: Creates a user from the request body.
+      operationId: post_api_v1_users
+      requestBody:
+        description: New user
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewUser'
+        required: true
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiTestUserOut'
+        '422':
+          description: id is required (validation/10001)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          x-xqua-errors:
+            - kind: validation
+              code: '10001'
+              message: id is required
+              source: params.id
+              http_status: 422
+        default:
+          description: Any other public catalog error, rendered in the error envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+  /api/v1/users/{id}:
+    get:
+      summary: Fetch one user
+      operationId: get_api_v1_users_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiTestUserOut'
+        '404':
+          description: user not found (not_found/10002)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          x-xqua-errors:
+            - kind: not_found
+              code: '10002'
+              message: user not found
+              http_status: 404
+        '422':
+          description: id is required (validation/10001)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          x-xqua-errors:
+            - kind: validation
+              code: '10001'
+              message: id is required
+              source: params.id
+              http_status: 422
+        default:
+          description: Any other public catalog error, rendered in the error envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+    put:
+      summary: Update a user
+      operationId: put_api_v1_users_id
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            format: int64
+      responses:
+        '200':
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OpenapiTestUserOut'
+        '404':
+          description: user not found (not_found/10002)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          x-xqua-errors:
+            - kind: not_found
+              code: '10002'
+              message: user not found
+              http_status: 404
+        '409':
+          description: stale user version (conflict/10003)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          x-xqua-errors:
+            - kind: conflict
+              code: '10003'
+              message: stale user version
+              http_status: 409
+        '422':
+          description: id is required (validation/10001)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+          x-xqua-errors:
+            - kind: validation
+              code: '10001'
+              message: id is required
+              source: params.id
+              http_status: 422
+        default:
+          description: Any other public catalog error, rendered in the error envelope
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorEnvelope'
+components:
+  schemas:
+    Cursor:
+      description: Cursor-based list metadata.
+      type: object
+      properties:
+        next:
+          type: string
+        previous:
+          type: string
+    Envelope:
+      description: Success envelope.
+      type: object
+      required:
+        - status
+      properties:
+        client_request_id:
+          description: Caller-supplied correlation ID (X-Client-Request-Id), echoed when valid.
+          type: string
+        cursor:
+          $ref: '#/components/schemas/Cursor'
+        data:
+          description: Route-specific payload. Routes may document it via Route.Responses; otherwise it is an open object.
+          type: object
+          additionalProperties: true
+        message:
+          type: string
+        pagination:
+          $ref: '#/components/schemas/Pagination'
+        request_id:
+          description: Server request ID (X-Request-Id).
+          type: string
+        status:
+          type: string
+          const: success
+    ErrorDetail:
+      description: One public catalog error as rendered on the wire.
+      type: object
+      required:
+        - kind
+        - code
+        - message
+      properties:
+        cause:
+          description: Underlying cause, when exposed.
+          type: string
+        code:
+          description: Catalog code, unique within the service catalog.
+          type: string
+        kind:
+          description: Semantic category (validation, not_found, …).
+          type: string
+        message:
+          type: string
+        source:
+          description: Field or input that caused the error.
+          type: string
+    ErrorEnvelope:
+      description: Error envelope. Errors are public catalog entries only.
+      type: object
+      required:
+        - status
+        - errors
+      properties:
+        client_request_id:
+          description: Caller-supplied correlation ID (X-Client-Request-Id), echoed when valid.
+          type: string
+        errors:
+          type: array
+          items:
+            $ref: '#/components/schemas/ErrorDetail'
+        message:
+          type: string
+        request_id:
+          description: Server request ID (X-Request-Id).
+          type: string
+        status:
+          type: string
+          const: error
+    NewUser:
+      type: object
+      required:
+        - name
+      properties:
+        email:
+          type: string
+        name:
+          type: string
+    OpenapiTestCreateUserIn:
+      type: object
+      properties:
+        name:
+          type: string
+    OpenapiTestUserOut:
+      type: object
+      properties:
+        client_request_id:
+          type: string
+        cursor:
+          type:
+            - object
+            - 'null'
+          properties:
+            next:
+              type: string
+            previous:
+              type: string
+        data:
+          type: object
+          properties:
+            name:
+              type: string
+        message:
+          type: string
+        pagination:
+          type:
+            - object
+            - 'null'
+          properties:
+            first:
+              type: boolean
+            last:
+              type: boolean
+            max_page:
+              type: integer
+              format: int32
+            page:
+              type: integer
+              format: int32
+            size:
+              type: integer
+              format: int32
+            total_count:
+              type: integer
+              format: int32
+            total_pages:
+              type: integer
+              format: int32
+        request_id:
+          type: string
+        status:
+          type: string
+    Pagination:
+      description: Page-based list metadata.
+      type: object
+      required:
+        - first
+        - last
+      properties:
+        first:
+          type: boolean
+        last:
+          type: boolean
+        max_page:
+          type: integer
+        page:
+          type: integer
+        size:
+          type: integer
+        total_count:
+          type: integer
+        total_pages:
+          type: integer
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+x-xqua-envelope-version: '1'

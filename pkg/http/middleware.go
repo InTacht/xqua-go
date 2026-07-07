@@ -25,8 +25,8 @@ type clientRequestIDKeyType struct{}
 var clientRequestIDKey = clientRequestIDKeyType{}
 
 // RequestContext bridges Fiber request IDs into the standard logger context.
-func RequestContext() fiber.Handler {
-	return func(c fiber.Ctx) error {
+func RequestContext() Handler {
+	return func(c Ctx) error {
 		if id := requestid.FromContext(c); id != "" {
 			c.SetContext(logger.ContextWithRequestID(c.Context(), id))
 		}
@@ -36,8 +36,8 @@ func RequestContext() fiber.Handler {
 
 // ClientRequestID echoes a valid X-Client-Request-Id request header back on
 // the response and stores it in context for the RES envelope.
-func ClientRequestID() fiber.Handler {
-	return func(c fiber.Ctx) error {
+func ClientRequestID() Handler {
+	return func(c Ctx) error {
 		if id := c.Get(HeaderClientRequestID); isValidClientRequestID(id) {
 			c.Set(HeaderClientRequestID, id)
 			fiber.StoreInContext(c, clientRequestIDKey, id)
@@ -72,8 +72,8 @@ func isValidClientRequestID(id string) bool {
 // AccessLog logs one line per request using the transport logger. The log
 // level is status-aware — 5xx logs at error, 4xx at warn, and everything else
 // at info — and the noisy /health endpoint is skipped.
-func AccessLog(log runtime.Logger) fiber.Handler {
-	return func(c fiber.Ctx) error {
+func AccessLog(log runtime.Logger) Handler {
+	return func(c Ctx) error {
 		if c.Path() == healthPath {
 			return c.Next()
 		}

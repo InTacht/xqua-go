@@ -190,7 +190,8 @@ A DX batch has already landed in xqua-go:
 - `Pair` / mappers
 - `/health` and `/version`
 - `pkg/env`
-- Manifest recording (bookkeeping for future OpenAPI / TypeScript generation)
+- Manifest recording (route summaries, path params, declared errors via `http.Route` fields with resolved statuses, full catalog, envelope version)
+- OpenAPI 3.2 generation in `pkg/http` (`http.Generate(manifest, spec)`; pure data in → spec out). `Config.OpenAPI []http.OpenAPISpec` auto-registers a lazy `GET` endpoint per document — several surfaces on one transport, filtered by path prefix and route membership tags (`Route.Specs`), each with a catalog subset. Huma-inspired but keeps catalog errors and RES handlers. Body schemas are declared explicitly (`Route.RequestBody` / `Route.Response`, inline or `Ref`), with an optional `http.SchemaOf[T]()` reflect helper.
 - `pkg/bus` local bus (Message-based Publish / Request, Subscribe / QueueSubscribe, wildcards, bounded FIFO mailboxes, Drain)
 
 The manifest is the seed of Plane A: a language-local recording surface that can later feed shared contracts and codegen.

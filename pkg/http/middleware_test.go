@@ -10,7 +10,6 @@ import (
 	"github.com/InTacht/xqua-go/pkg/errors"
 	"github.com/InTacht/xqua-go/pkg/http"
 	"github.com/InTacht/xqua-go/pkg/logger"
-	"github.com/gofiber/fiber/v3"
 )
 
 var mwTestCatalog = errors.NewCatalog("middleware")
@@ -40,11 +39,8 @@ func testHTTPConfig() http.Config {
 }
 
 func TestRequestIDInEnvelope(t *testing.T) {
-	tr := http.New(testHTTPConfig()).Routes("/", func(r *http.Router) {
-		r.Get("/", func(c fiber.Ctx) error {
-			return http.RES(c).Message("ok").Ok()
-		})
-	})
+	tr := http.New(testHTTPConfig())
+	tr.Fiber().Get("/", func(c http.Ctx) error { return http.RES(c).Message("ok").Ok() })
 
 	resp, err := tr.Fiber().Test(httptest.NewRequest("GET", "/", nil))
 	if err != nil {
@@ -68,11 +64,8 @@ func TestRequestIDInEnvelope(t *testing.T) {
 }
 
 func TestClientRequestIDEcho(t *testing.T) {
-	tr := http.New(testHTTPConfig()).Routes("/", func(r *http.Router) {
-		r.Get("/", func(c fiber.Ctx) error {
-			return http.RES(c).Message("ok").Ok()
-		})
-	})
+	tr := http.New(testHTTPConfig())
+	tr.Fiber().Get("/", func(c http.Ctx) error { return http.RES(c).Message("ok").Ok() })
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set(http.HeaderClientRequestID, "client-abc-123")
@@ -98,11 +91,8 @@ func TestClientRequestIDEcho(t *testing.T) {
 }
 
 func TestClientRequestIDAbsentOrInvalid(t *testing.T) {
-	tr := http.New(testHTTPConfig()).Routes("/", func(r *http.Router) {
-		r.Get("/", func(c fiber.Ctx) error {
-			return http.RES(c).Message("ok").Ok()
-		})
-	})
+	tr := http.New(testHTTPConfig())
+	tr.Fiber().Get("/", func(c http.Ctx) error { return http.RES(c).Message("ok").Ok() })
 
 	t.Run("absent header is not reflected", func(t *testing.T) {
 		resp, err := tr.Fiber().Test(httptest.NewRequest("GET", "/", nil))
@@ -141,11 +131,8 @@ func TestClientRequestIDAbsentOrInvalid(t *testing.T) {
 }
 
 func TestErrorHandlerPlainError(t *testing.T) {
-	tr := http.New(testHTTPConfig()).Routes("/", func(r *http.Router) {
-		r.Get("/boom", func(c fiber.Ctx) error {
-			return errors.NewPlain("simulated failure")
-		})
-	})
+	tr := http.New(testHTTPConfig())
+	tr.Fiber().Get("/boom", func(c http.Ctx) error { return errors.NewPlain("simulated failure") })
 
 	resp, err := tr.Fiber().Test(httptest.NewRequest("GET", "/boom", nil))
 	if err != nil {

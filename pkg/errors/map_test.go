@@ -136,6 +136,21 @@ func TestMapOr(t *testing.T) {
 		}
 	})
 
+	t.Run("wraps unmatched structured error with fallback", func(t *testing.T) {
+		internal := catalog.errIDRequired
+		err := errors.MapOr(
+			internal,
+			catalog.errFallback,
+			errors.Pair(catalog.errUserNotFound, catalog.errFetchUserFailed),
+		)
+		if !errors.Is(err, catalog.errFallback) {
+			t.Fatal("MapOr should wrap unmatched structured errors with fallback")
+		}
+		if !errors.Is(err, internal) {
+			t.Fatal("expected original error preserved in wrap chain")
+		}
+	})
+
 	t.Run("nil returns nil", func(t *testing.T) {
 		if errors.MapOr(nil, catalog.errFallback) != nil {
 			t.Fatal("MapOr(nil) should be nil")

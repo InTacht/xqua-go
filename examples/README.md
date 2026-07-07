@@ -1,26 +1,65 @@
 # Examples
 
-Headless packages, assembled by you. Read them in this order — each adds one idea.
+Two tiers: start with **`hello`**, then open **`showcase`** for the full HTTP/OpenAPI surface. The rest are **separate programs** — each demonstrates one orthogonal idea (bus, ports, logging).
 
-| # | Example | Run | What it teaches |
-|---|---------|-----|-----------------|
-| 1 | [`hello`](./hello) | `go run ./examples/hello` | Minimal `runtime` + one HTTP `Unit`, catalog fallbacks, RES envelope |
-| 2 | [`catalog`](./catalog) | `go run ./examples/catalog` | Public catalog, kind→status, internal errors never leak, `Pair` / validation collections |
-| 3 | [`multiport`](./multiport) | `go run ./examples/multiport` | Several units in one process (public `:8080` + admin `:8081`) |
-| 4 | [`bus`](./bus) | `go run ./examples/bus` | Local bus: HTTP request/replies to competing worker units |
-| 5 | [`split`](./split) | `go run ./examples/split` | Compute (HTTP) and storage as separate units talking only over the bus |
-| 6 | [`api`](./api) | `make dev-up && go run ./examples/api` | Postgres, migrations, hooks, store boundary mapping |
-| 7 | [`logging`](./logging) | `go run ./examples/logging` | Structured error logging alone (no HTTP) |
+## Tier 1 — HTTP essentials
+
+| Example | Run | What it teaches |
+|---------|-----|-----------------|
+| [`hello`](./hello) | `go run ./examples/hello` | Minimal `runtime` + typed handler + RES envelope + `/openapi.json` |
+| [`showcase`](./showcase) | `make dev-up && go run ./examples/showcase` | **Everything else HTTP** in one place (see below) |
+
+### What `showcase` covers
+
+One process, one transport — deliberately rich:
+
+| Area | Routes / docs | Capability |
+|------|----------------|------------|
+| Postgres API | `GET /api/v1/users`, `GET /api/v1/users/:id` | Migrations, store boundary `MapOr`, health check, request logging |
+| Demo (in-memory) | `GET /demo/items/:id`, `POST /demo/items` | Catalog mapping, validation collections, group 422 inheritance |
+| Multipart | `POST /demo/upload` | `form` tags + `*multipart.FileHeader`, OpenAPI `Requests` encoding |
+| Multi-surface OpenAPI | `/openapi.json`, `/mobile/openapi.json`, `/console/openapi.json`, `/demo/openapi.json` | Prefix + tag filtering, component `$ref` schemas |
+| Docs-only | `GET /demo/ws` (Describe) | 101 WebSocket in spec, no Fiber handler |
+| Escape hatches | `GET /demo/leak`, `/demo/plain`, `/api/v1/boom` | Internal error leak protection, plain errors, imperative Fiber |
 
 ```bash
-go run ./examples/hello
-go run ./examples/catalog
+make dev-up && go run ./examples/showcase
+
+curl http://127.0.0.1:8080/api/v1/users
+curl http://127.0.0.1:8080/demo/items/1
+curl http://127.0.0.1:8080/demo/items/99          # internal → mapped 500
+curl -X POST http://127.0.0.1:8080/demo/items     # validation collection → 422
+curl -F title=report -F file=@README.md http://127.0.0.1:8080/demo/upload
+curl http://127.0.0.1:8080/demo/leak              # internal never leaks
+curl http://127.0.0.1:8080/openapi.json
+curl http://127.0.0.1:8080/demo/openapi.json
+```
+
+## Tier 2 — Separate concerns
+
+Each program adds **one** idea not duplicated in `showcase`:
+
+| Example | Run | What it teaches |
+|---------|-----|-----------------|
+| [`multiport`](./multiport) | `go run ./examples/multiport` | Two HTTP units, two ports (`:8080` + `:8081`) in one runtime |
+| [`bus`](./bus) | `go run ./examples/bus` | Local bus: HTTP → `Request`, competing `QueueSubscribe` workers |
+| [`split`](./split) | `go run ./examples/split` | Compute + storage as separate units, no shared pointers — bus only |
+| [`logging`](./logging) | `go run ./examples/logging` | Structured error logging (no HTTP) |
+
+```bash
 go run ./examples/multiport
 go run ./examples/bus
 go run ./examples/split
-make dev-up && go run ./examples/api
 go run ./examples/logging
 ```
+
+## Suggested reading order
+
+```text
+hello → showcase → multiport → bus → split → logging
+```
+
+Skip straight to `showcase` if you already know Go services; use `hello` when you want the smallest possible process first.
 
 ## Mental model
 
@@ -29,15 +68,16 @@ main             builds deps, owns teardown (defer)
      │
 runtime          supervises Units (lifecycle only)
      │
-     ├─ http.Unit      binds a port, public catalog on the wire
-     ├─ worker.Unit    custom Unit (Subscribe / QueueSubscribe)
-     └─ storage.Unit   another custom Unit
+     ├─ http.Transport     Fiber app, catalog safety net, middleware, /health
+     │       └─ openapi.Generator   typed routes + generated OpenAPI docs
+     ├─ worker.Unit        custom Unit (Subscribe / QueueSubscribe)
+     └─ storage.Unit       another custom Unit
               │
               └── bus (app ctx)   units never call each other by pointer
 ```
 
-- **Logger**: `logger.New` + `defer appLog.Close()` on the root only; `runtime.New(ctx, log)` is ctx-first. Derive per-unit labels in factories (`log.Derive("http")`); never Close children (shared zap core).
-- **Dependencies** are built in `main` and released there with `defer`; runtime has no `Build`/`Destroy` contract.
-- **Narrowing**: unit factories pull only what a unit needs out of the app context, so unit packages never import your context type (`worker.New(bus, log.Derive("worker"))`).
-- **Bus** is a dependency built in `main` and passed via the app context, not on runtime.
+- **Logger**: `logger.New` + `defer appLog.Close()` on the root only. Derive per-unit labels (`log.Derive("http")`); never Close children.
+- **Dependencies** are built in `main` / `run()` and released with `defer`.
+- **Narrowing**: unit factories pull only what they need (`worker.New(bus, log.Derive("worker"))`).
 - **Errors** on the wire come only from the public catalog; map internal catalogs at boundaries.
+- **OpenAPI**: `openapi.New(t, ...)`, `r.Route(path).Get(openapi.Route{...})`, `Returns().Err(...)`. Imperative routes use `t.Fiber()`.

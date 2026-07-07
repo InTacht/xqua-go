@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"slices"
 	"time"
 
 	"github.com/InTacht/xqua-go/pkg/errors"
@@ -52,17 +53,9 @@ type Config struct {
 	Fallbacks Fallbacks
 
 	// DefaultStatus is the HTTP status used by the global error handler for
-	// plain and unmapped errors, and by the Router when a returned catalog
-	// error's kind is not present in KindStatuses. Defaults to 500 when zero
-	// or negative.
+	// plain and unmapped errors. Defaults to 500 when zero or negative.
+	// Engines (openapi) read it as the fallback for kinds they do not map.
 	DefaultStatus int
-
-	// KindStatuses maps semantic error kinds to HTTP status codes. When a
-	// returned catalog error has no explicit per-route Status/Statuses
-	// mapping, the Router resolves its status from this table by kind (see
-	// errors.Kind* and DefaultKindStatuses). Unknown kinds fall back to
-	// DefaultStatus. When nil, DefaultKindStatuses() is used.
-	KindStatuses KindStatuses
 
 	// HealthCheck, when set, backs GET /health: a nil error renders a 200
 	// "alive" envelope; a non-nil error renders a 503 envelope. When nil, a
@@ -71,12 +64,19 @@ type Config struct {
 
 	// Version, BuildID, and BuildTime populate the GET /version endpoint.
 	// They are optional; empty values are omitted from the response.
+	// Version is also the default info.version for OpenAPI documents served
+	// by an attached openapi engine.
 	Version   string
 	BuildID   string
 	BuildTime string
 
 	FiberConfig fiber.Config
 }
+
+// MethodQuery is the HTTP QUERY method (RFC 9110 / OpenAPI 3.2). The transport
+// always registers it with Fiber so the openapi engine's Router.Query works;
+// OpenAPI emits it as the "query" operation key.
+const MethodQuery = "QUERY"
 
 // Operational defaults applied to FiberConfig when the corresponding field is
 // left at its zero value. Every default is overridable via Config.FiberConfig.
@@ -85,13 +85,6 @@ const (
 	defaultWriteTimeout = 15 * time.Second
 	defaultBodyLimit    = 4 * 1024 * 1024 // 4 MiB
 )
-
-func resolveKindStatuses(ks KindStatuses) KindStatuses {
-	if ks == nil {
-		return DefaultKindStatuses()
-	}
-	return ks
-}
 
 func applyOperationalDefaults(cfg fiber.Config) fiber.Config {
 	if cfg.ReadTimeout == 0 {
@@ -103,7 +96,24 @@ func applyOperationalDefaults(cfg fiber.Config) fiber.Config {
 	if cfg.BodyLimit == 0 {
 		cfg.BodyLimit = defaultBodyLimit
 	}
+	// Fiber only accepts methods listed in RequestMethods. Always include QUERY
+	// (OpenAPI 3.2 / Router.Query) alongside the defaults or the caller's list.
+	cfg.RequestMethods = withQueryMethod(cfg.RequestMethods)
 	return cfg
+}
+
+// withQueryMethod returns methods with MethodQuery present. An empty input
+// starts from fiber.DefaultMethods so standard verbs stay registered.
+func withQueryMethod(methods []string) []string {
+	if len(methods) == 0 {
+		methods = fiber.DefaultMethods
+	}
+	if slices.Contains(methods, MethodQuery) {
+		return methods
+	}
+	out := make([]string, len(methods), len(methods)+1)
+	copy(out, methods)
+	return append(out, MethodQuery)
 }
 
 func defaultMiddleware() Middleware {

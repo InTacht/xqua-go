@@ -15,13 +15,12 @@ import (
 // else — plain errors and internal catalog errors that must not leak — is
 // replaced by the Unhandled fallback with defaultStatus.
 func ErrorHandler(log runtime.Logger, catalog *errors.Catalog, fallbacks Fallbacks, defaultStatus int) fiber.ErrorHandler {
-	return func(c fiber.Ctx, err error) error {
+	return func(c Ctx, err error) error {
 		if err == nil {
 			return nil
 		}
 
-		var fe *fiber.Error
-		if stderrors.As(err, &fe) {
+		if fe, ok := stderrors.AsType[*fiber.Error](err); ok {
 			entry := fallbacks.Unhandled
 			message := "request failed"
 			if fe.Code == fiber.StatusNotFound {

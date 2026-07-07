@@ -71,13 +71,19 @@ func Or(err error, fallback *Error) error {
 	return Wrap(err, clone(fallback))
 }
 
-// MapOr applies mappers first, then falls back to Or with a catalog entry.
+// MapOr applies mappers first, then wraps err with fallback when none match.
+// Unlike Map or Or alone, the fallback applies even when err is already
+// structured — the typical boundary pattern where known internal entries are
+// paired explicitly and everything else maps to one public fallback.
 func MapOr(err error, fallback *Error, mappers ...Mapper) error {
 	if err == nil {
 		return nil
 	}
-	if mapped := Map(err, mappers...); mapped != nil {
-		return mapped
+	for _, m := range mappers {
+		if e, ok := m(err); ok && e != nil {
+			return Wrap(err, e)
+		}
 	}
-	return Or(err, fallback)
+	validateFallback(fallback)
+	return Wrap(err, clone(fallback))
 }
