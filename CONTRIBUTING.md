@@ -129,13 +129,3 @@ gh release create v0.2.0 --title v0.2.0 --notes-file notes.txt
 ```
 
 `release-github` skips quietly when `gh` is not installed; the tag push is still enough for `go get` to resolve the module.
-
-### First release note (v0.1.0)
-
-`v0.1.0` was tagged before this workflow landed. Its notes live in `CHANGELOG.md`; push the tag and create the GitHub release manually if they are not on the remote yet:
-
-```bash
-git push origin v0.1.0
-gh release create v0.1.0 --title v0.1.0 --notes-file <(awk -v ver="0.1.0" \
-  '$0 ~ "^## \\[" ver "\\] " { found=1; next } found && /^## \[/ { exit } found { print }' CHANGELOG.md)
-```
