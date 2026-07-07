@@ -36,7 +36,7 @@ type Route struct {
 	Deprecated   bool
 	Hidden       bool
 	ExternalDocs *ExternalDocs
-	Security     []SecurityRequirement
+	Security     SecuritySpec
 }
 
 // ResponseDecl declares one OpenAPI response for Extra or webhooks.
@@ -64,7 +64,7 @@ type GroupConfig struct {
 	Specs       []string
 	Deprecated  bool
 	Hidden      bool
-	Security    []SecurityRequirement
+	Security    SecuritySpec
 }
 
 type routeContract struct {
@@ -79,6 +79,7 @@ type routeContract struct {
 	hidden          bool
 	externalDocs    *ExternalDocs
 	security        []SecurityRequirement
+	securityPublic  bool
 	request         any
 	requests        []ContentUnit
 	successBody     any
@@ -101,7 +102,6 @@ func routeToContract(route Route) routeContract {
 		deprecated:      route.Deprecated,
 		hidden:          route.Hidden,
 		externalDocs:    route.ExternalDocs,
-		security:        append([]SecurityRequirement(nil), route.Security...),
 		requests:        append([]ContentUnit(nil), route.Requests...),
 		extra:           append([]ResponseDecl(nil), route.Extra...),
 	}
@@ -116,7 +116,6 @@ func groupToContract(g GroupConfig) routeContract {
 		specs:       append([]string(nil), g.Specs...),
 		deprecated:  g.Deprecated,
 		hidden:      g.Hidden,
-		security:    append([]SecurityRequirement(nil), g.Security...),
 	}
 }
 
@@ -129,7 +128,6 @@ func mergeContract(base, child routeContract) routeContract {
 		hidden:      base.hidden || child.hidden,
 		tags:        appendDedupe(base.tags, child.tags),
 		specs:       appendDedupe(base.specs, child.specs),
-		security:    append(append([]SecurityRequirement(nil), base.security...), child.security...),
 		responses:   base.responses,
 		requests:    base.requests,
 		extra:       base.extra,
@@ -164,33 +162,54 @@ type Router struct {
 	catalog *errors.Catalog
 	base    routeContract
 
-	kindStatuses  KindStatuses
-	defaultStatus int
-	prefix        string
-	rec           *recorder
+	kindStatuses    KindStatuses
+	defaultStatus   int
+	prefix          string
+	rec             *recorder
+	schemes         map[string]Scheme
+	defaultSecurity SecuritySpec
+	securityStack   []SecuritySpec
 }
 
-func newRouter(r fiber.Router, catalog *errors.Catalog, kindStatuses KindStatuses, defaultStatus int, prefix string, rec *recorder) *Router {
+func newRouter(
+	r fiber.Router,
+	catalog *errors.Catalog,
+	kindStatuses KindStatuses,
+	defaultStatus int,
+	prefix string,
+	rec *recorder,
+	schemes map[string]Scheme,
+	defaultSecurity SecuritySpec,
+) *Router {
 	return &Router{
-		router:        r,
-		catalog:       catalog,
-		kindStatuses:  kindStatuses,
-		defaultStatus: defaultStatus,
-		prefix:        prefix,
-		rec:           rec,
+		router:          r,
+		catalog:         catalog,
+		kindStatuses:    kindStatuses,
+		defaultStatus:   defaultStatus,
+		prefix:          prefix,
+		rec:             rec,
+		schemes:         schemes,
+		defaultSecurity: defaultSecurity,
 	}
 }
 
 // Group creates a sub-router under g.Prefix.
 func (r *Router) Group(g GroupConfig) *Router {
+	stack := r.securityStack
+	if g.Security.isExplicit() {
+		stack = append(append([]SecuritySpec(nil), stack...), g.Security)
+	}
 	return &Router{
-		router:        r.router.Group(g.Prefix),
-		catalog:       r.catalog,
-		base:          mergeContract(r.base, groupToContract(g)),
-		kindStatuses:  r.kindStatuses,
-		defaultStatus: r.defaultStatus,
-		prefix:        joinPath(r.prefix, g.Prefix),
-		rec:           r.rec,
+		router:          r.router.Group(g.Prefix),
+		catalog:         r.catalog,
+		base:            mergeContract(r.base, groupToContract(g)),
+		kindStatuses:    r.kindStatuses,
+		defaultStatus:   r.defaultStatus,
+		prefix:          joinPath(r.prefix, g.Prefix),
+		rec:             r.rec,
+		schemes:         r.schemes,
+		defaultSecurity: r.defaultSecurity,
+		securityStack:   stack,
 	}
 }
 
@@ -220,18 +239,19 @@ func (r *Router) record(method, path string, re routeContract, compiled *compile
 		Errors:      specs,
 		Documented:  documented,
 		op: operationDecl{
-			deprecated:   re.deprecated,
-			hidden:       re.hidden,
-			externalDocs: re.externalDocs,
-			security:     re.security,
-			request:      re.request,
-			requests:     re.requests,
-			successBody:  re.successBody,
-			enveloped:    re.enveloped,
-			inType:       re.inType,
-			outType:      re.outType,
-			errCases:     re.errCases,
-			extra:        re.extra,
+			deprecated:     re.deprecated,
+			hidden:         re.hidden,
+			externalDocs:   re.externalDocs,
+			security:       re.security,
+			securityPublic: re.securityPublic,
+			request:        re.request,
+			requests:       re.requests,
+			successBody:    re.successBody,
+			enveloped:      re.enveloped,
+			inType:         re.inType,
+			outType:        re.outType,
+			errCases:       re.errCases,
+			extra:          re.extra,
 		},
 	})
 }
@@ -262,16 +282,17 @@ func errorSpecsFromCases(cases []ErrCase) []ErrorSpec {
 }
 
 type operationDecl struct {
-	deprecated   bool
-	hidden       bool
-	externalDocs *ExternalDocs
-	security     []SecurityRequirement
-	request      any
-	requests     []ContentUnit
-	successBody  any
-	enveloped    bool
-	inType       reflect.Type
-	outType      reflect.Type
-	errCases     []ErrCase
-	extra        []ResponseDecl
+	deprecated     bool
+	hidden         bool
+	externalDocs   *ExternalDocs
+	security       []SecurityRequirement
+	securityPublic bool
+	request        any
+	requests       []ContentUnit
+	successBody    any
+	enveloped      bool
+	inType         reflect.Type
+	outType        reflect.Type
+	errCases       []ErrCase
+	extra          []ResponseDecl
 }

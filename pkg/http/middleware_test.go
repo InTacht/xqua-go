@@ -10,6 +10,11 @@ import (
 	"github.com/InTacht/xqua-go/pkg/errors"
 	"github.com/InTacht/xqua-go/pkg/http"
 	"github.com/InTacht/xqua-go/pkg/logger"
+
+	"github.com/gofiber/fiber/v3"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 var mwTestCatalog = errors.NewCatalog("middleware")
@@ -128,6 +133,78 @@ func TestClientRequestIDAbsentOrInvalid(t *testing.T) {
 			t.Fatalf("expected oversized client request id to be dropped, got %q", hdr)
 		}
 	})
+}
+
+func TestAccessLogUsesErrorStatus(t *testing.T) {
+	core, recorded := observer.New(zapcore.ErrorLevel)
+	log := logger.FromZap(&logger.Config{Name: "test", ID: "test-1"}, zap.New(core))
+
+	cfg := testHTTPConfig()
+	cfg.Logger = log
+	tr := http.New(cfg)
+	tr.Fiber().Get("/boom", func(c http.Ctx) error { return errors.NewPlain("simulated failure") })
+
+	resp, err := tr.Fiber().Test(httptest.NewRequest("GET", "/boom", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 500 {
+		t.Fatalf("expected 500, got %d", resp.StatusCode)
+	}
+
+	entries := recorded.AllUntimed()
+	var accessLine string
+	for _, e := range entries {
+		if strings.Contains(e.Message, "GET. /boom.") {
+			accessLine = e.Message
+			break
+		}
+	}
+	if accessLine == "" {
+		t.Fatalf("expected access log for /boom, got %d entries", len(entries))
+	}
+	if !strings.Contains(accessLine, "status=500") {
+		t.Fatalf("expected access log status=500, got %q", accessLine)
+	}
+}
+
+func TestAccessLogUses4xxStatus(t *testing.T) {
+	core, recorded := observer.New(zapcore.WarnLevel)
+	log := logger.FromZap(&logger.Config{Name: "test", ID: "test-1"}, zap.New(core))
+
+	cfg := testHTTPConfig()
+	cfg.Logger = log
+	tr := http.New(cfg)
+	tr.Fiber().Get("/bad", func(c http.Ctx) error {
+		return fiber.NewError(fiber.StatusUnprocessableEntity, "validation failed")
+	})
+
+	resp, err := tr.Fiber().Test(httptest.NewRequest("GET", "/bad", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 422 {
+		t.Fatalf("expected 422, got %d", resp.StatusCode)
+	}
+
+	entries := recorded.AllUntimed()
+	var accessLine string
+	for _, e := range entries {
+		if strings.Contains(e.Message, "GET. /bad.") {
+			accessLine = e.Message
+			break
+		}
+	}
+	if accessLine == "" {
+		t.Fatalf("expected access log for /bad, got %d entries", len(entries))
+	}
+	if !strings.Contains(accessLine, "status=422") {
+		t.Fatalf("expected access log status=422, got %q", accessLine)
+	}
 }
 
 func TestErrorHandlerPlainError(t *testing.T) {

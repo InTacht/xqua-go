@@ -347,6 +347,11 @@ func (b *Binder) validateStruct(v reflect.Value, prefix string) error {
 }
 
 func (b *Binder) validateField(field reflect.StructField, fv reflect.Value, src string) error {
+	if oreflect.TagName(field, "json") != "" && oreflect.BoolTag(field.Tag.Get("required")) {
+		if isZeroValue(fv) {
+			return errors.Errors{b.validationErr(src, "required")}
+		}
+	}
 	if tag := field.Tag.Get("minimum"); tag != "" {
 		min, _ := strconv.ParseFloat(tag, 64)
 		if fv.Kind() >= reflect.Int && fv.Kind() <= reflect.Int64 {
@@ -362,6 +367,19 @@ func (b *Binder) validateField(field reflect.StructField, fv reflect.Value, src 
 		}
 	}
 	return nil
+}
+
+func isZeroValue(v reflect.Value) bool {
+	switch v.Kind() {
+	case reflect.String:
+		return v.Len() == 0
+	case reflect.Slice, reflect.Map:
+		return v.IsNil() || v.Len() == 0
+	case reflect.Pointer, reflect.Interface:
+		return v.IsNil()
+	default:
+		return v.IsZero()
+	}
 }
 
 func fieldSource(field reflect.StructField, prefix string) string {

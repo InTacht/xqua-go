@@ -16,13 +16,14 @@ import (
 var routerCatalog = errors.NewCatalog("router")
 
 var (
-	rtNotFound   = routerCatalog.Define(errors.Def{Kind: errors.KindNotFound, Code: "10001", Message: "not found"})
-	rtValidation = routerCatalog.Define(errors.Def{Kind: errors.KindValidation, Code: "10002", Message: "invalid input"})
-	rtIDInvalid  = routerCatalog.Define(errors.Def{Kind: errors.KindValidation, Code: "10006", Message: "id is invalid", Source: "params.id"})
-	rtInternal   = routerCatalog.Define(errors.Def{Kind: errors.KindInternal, Code: "10003", Message: "boom"})
-	rtUnmapped   = routerCatalog.Define(errors.Def{Kind: errors.KindInternal, Code: "10004", Message: "unmapped"})
-	rtUnhandled  = routerCatalog.Define(errors.Def{Kind: errors.KindInternal, Code: "10500", Message: "internal error"})
-	rtRouteMiss  = routerCatalog.Define(errors.Def{Kind: errors.KindNotFound, Code: "10404", Message: "route not found"})
+	rtNotFound     = routerCatalog.Define(errors.Def{Kind: errors.KindNotFound, Code: "10001", Message: "not found"})
+	rtValidation   = routerCatalog.Define(errors.Def{Kind: errors.KindValidation, Code: "10002", Message: "invalid input"})
+	rtIDInvalid    = routerCatalog.Define(errors.Def{Kind: errors.KindValidation, Code: "10006", Message: "id is invalid", Source: "params.id"})
+	rtInternal     = routerCatalog.Define(errors.Def{Kind: errors.KindInternal, Code: "10003", Message: "boom"})
+	rtUnmapped     = routerCatalog.Define(errors.Def{Kind: errors.KindInternal, Code: "10004", Message: "unmapped"})
+	rtUnhandled    = routerCatalog.Define(errors.Def{Kind: errors.KindInternal, Code: "10500", Message: "internal error"})
+	rtRouteMiss    = routerCatalog.Define(errors.Def{Kind: errors.KindNotFound, Code: "10404", Message: "route not found"})
+	rtUnauthorized = routerCatalog.Define(errors.Def{Kind: errors.KindUnauthorized, Code: "10401", Message: "unauthorized"})
 )
 
 var internalCatalog = errors.NewCatalog("store")
@@ -333,5 +334,55 @@ func TestBindFailureUsesSourceSpecificCatalog(t *testing.T) {
 	}
 	if out.Errors[0].Source != "params.id" {
 		t.Fatalf("expected source params.id, got %q", out.Errors[0].Source)
+	}
+}
+
+func TestSecuredRouteEnforcesBearer(t *testing.T) {
+	tr, _ := newAPI(routerHTTPConfig())
+	api := openapi.New(tr, openapi.Config{
+		Specs: []openapi.Spec{},
+		Schemes: map[string]openapi.Scheme{
+			"TestBearer": openapi.BearerScheme(openapi.BearerOptions{
+				Verify: func(_ context.Context, cred openapi.Credential) (openapi.Identity, error) {
+					if cred.Raw != "good-token" {
+						return nil, rtUnauthorized
+					}
+					return "user-42", nil
+				},
+			}),
+		},
+	})
+	api.Routes("/", func(r *openapi.Router) {
+		r.Route("/me").Get(openapi.Route{
+			Handler: func(ctx context.Context, _ struct{}) (ackOut, error) {
+				id, ok := openapi.IdentityFrom(ctx)
+				if !ok || id != "user-42" {
+					t.Fatalf("unexpected identity: %v ok=%v", id, ok)
+				}
+				return ackOut{Response: openapi.Response{Message: "ok"}}, nil
+			},
+			Security:  openapi.RequireSecurity("TestBearer"),
+			Responses: openapi.Returns().Err(401, rtUnauthorized),
+		})
+	})
+
+	req := httptest.NewRequest("GET", "/me", nil)
+	resp, err := tr.Fiber().Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 401 {
+		t.Fatalf("expected 401 without token, got %d", resp.StatusCode)
+	}
+
+	req = httptest.NewRequest("GET", "/me", nil)
+	req.Header.Set("Authorization", "Bearer good-token")
+	resp, err = tr.Fiber().Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200 with token, got %d", resp.StatusCode)
 	}
 }

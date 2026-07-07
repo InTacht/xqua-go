@@ -74,9 +74,40 @@
 // Request bodies and responses are described by reflection (Go struct tags) or
 // by explicit *openapi.Schema values. Multipart uploads bind at runtime when
 // input fields use form tags with *multipart.FileHeader, []*multipart.FileHeader,
-// or multipart.File. features include itemSchema
-// streaming responses (ResponseDecl.ItemBody), the QUERY method, multipart
-// form-data, and OAuth2 deviceAuthorization security schemes.
+// or multipart.File. OpenAPI 3.2 extras include itemSchema streaming responses
+// (ResponseDecl.ItemBody), the QUERY method, multipart form-data, and full
+// security scheme metadata (apiKey, http, oauth2, openIdConnect, mutualTLS).
+//
+// # Security
+//
+// Register schemes once on Config.Schemes. Each Scheme carries OpenAPI metadata
+// plus a Verify hook that returns any identity value (stored on context.Context):
+//
+//	api := openapi.New(t, openapi.Config{
+//	    Schemes: map[string]openapi.Scheme{
+//	        "BearerAuth": openapi.BearerScheme(openapi.BearerOptions{
+//	            Verify: func(ctx context.Context, cred openapi.Credential) (openapi.Identity, error) {
+//	                user, err := auth.VerifyToken(cred.Raw)
+//	                return user, err
+//	            },
+//	        }),
+//	        "ApiKey": openapi.APIKeyScheme(openapi.APIKeyOptions{
+//	            Name: "X-API-Token", In: openapi.InHeader, Verify: auth.VerifyAPIKey,
+//	        }),
+//	    },
+//	    Security: openapi.RequireSecurity("BearerAuth"), // engine default
+//	})
+//
+// Declare requirements per group or route with SecuritySpec helpers:
+//
+//	Security: openapi.PublicSecurity()                              // explicitly open
+//	Security: openapi.RequireSecurity("BearerAuth")                  // one scheme
+//	Security: openapi.RequireAnySecurity("BearerAuth", "ApiKey")     // OpenAPI OR
+//	Security: openapi.InheritSecurity()                             // zero value; inherit
+//
+// Secured live routes must declare Responses.Err(401, ...) and Err(403, ...) when
+// scopes are required. The guard runs before binding; handlers read identity with
+// openapi.IdentityFrom(ctx) or openapi.IdentityAs[T](ctx).
 //
 // # Documentation-only operations and webhooks
 //

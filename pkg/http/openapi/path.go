@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"fmt"
 	"reflect"
 	"slices"
 
@@ -46,7 +47,11 @@ func (p *PathRouter) Handle(method string, route Route) *PathRouter {
 func (p *PathRouter) register(method string, route Route) *PathRouter {
 	compiled, contract := p.parent.compileRoute(method, p.path, route, false)
 	if p.parent.router != nil {
-		p.parent.router.Add([]string{method}, p.path, adapter.Handler(compiled, p.parent.catalog))
+		h := adapter.Handler(compiled, p.parent.catalog)
+		if len(contract.security) > 0 {
+			h = wrapWithSecurity(compiled, contract.security, p.parent.schemes, p.parent.catalog, h)
+		}
+		p.parent.router.Add([]string{method}, p.path, h)
 	}
 	p.parent.record(method, p.path, contract, compiled)
 	return p
@@ -77,6 +82,10 @@ func (r *Router) compileRoute(method, path string, route Route, describe bool) (
 	merged := MergeResponseSets(r.base.responses, route.Responses)
 	errCases := toCompileErrCases(merged.Cases())
 
+	requirements, public := ResolveSecurity(route.Security, r.securityStack, r.defaultSecurity)
+	prefix := fmt.Sprintf("openapi: %s %s", method, joinPath(r.prefix, path))
+	validateSecuredRoute(prefix, requirements, r.schemes, errCases, describe)
+
 	successType := merged.SuccessType()
 	compiled := compile.Build(compile.Input{
 		Method:        method,
@@ -106,6 +115,8 @@ func (r *Router) compileRoute(method, path string, route Route, describe bool) (
 	re.outType = compiled.SuccessType
 	re.errCases = merged.Cases()
 	re.extra = append([]ResponseDecl(nil), route.Extra...)
+	re.security = requirements
+	re.securityPublic = public
 
 	return compiled, re
 }

@@ -9,30 +9,80 @@ Two tiers: start with **`hello`**, then open **`showcase`** for the full HTTP/Op
 | [`hello`](./hello) | `go run ./examples/hello` | Minimal `runtime` + typed handler + RES envelope + `/openapi.json` |
 | [`showcase`](./showcase) | `make dev-up && go run ./examples/showcase` | **Everything else HTTP** in one place (see below) |
 
+### Layout
+
+```text
+examples/showcase/
+  main.go                 entrypoint → app.Run()
+  app/
+    app.go                config, Run()
+    wire.go               repository + service composition root
+    migrations/
+      core/               users schema (DATABASE_URL)
+      demo/               audit schema (DEMO_DATABASE_URL)
+    transport/
+      errors/             public HTTP catalog
+      auth/               security schemes + auth routes
+      routes/
+        users/            /api/v1/users + audit
+        demo/             /demo/* engine demos + escape hatches
+        surfaces/         /mobile, /console OpenAPI surfaces
+      http.go             compose HTTP + OpenAPI
+  pkg/
+    domain/               User, Item, Session, AuditEntry
+    repository/
+      repository.go       interfaces + Repo struct
+      repo.go             Repo facade fields + Ping
+      postgres/
+        core/             core DB — users
+        demo/             demo DB — audit trail
+      memory/             ephemeral items + API tokens
+    services/             use cases (accept *repository.Repo)
+```
+
+Layering:
+
+```text
+transport  →  services  →  repository.Repo  →  backends  →  domain
+     ↓                           │
+  errors                    core PG · demo PG · memory
+```
+
+Backends (wired once in `app/wire.go`):
+
+| Backend | Env | Holds |
+|---------|-----|--------|
+| Core Postgres | `DATABASE_URL` | Users |
+| Demo Postgres | `DEMO_DATABASE_URL` | Audit trail |
+| Memory | (in-process) | Demo items, API tokens |
+
+First-time dev setup creates the `demo` database via `scripts/dev-postgres-init/`. If the volume already exists, run `make dev-reset` once.
+
 ### What `showcase` covers
 
-One process, one transport — deliberately rich:
+One process, one transport — deliberately rich. **Full curl recipes:** [`showcase/TESTING.md`](./showcase/TESTING.md).
 
 | Area | Routes / docs | Capability |
 |------|----------------|------------|
-| Postgres API | `GET /api/v1/users`, `GET /api/v1/users/:id` | Migrations, store boundary `MapOr`, health check, request logging |
-| Demo (in-memory) | `GET /demo/items/:id`, `POST /demo/items` | Catalog mapping, validation collections, group 422 inheritance |
+| Application shell | `main` → `app.Run()` | Config, logging, migrations, runtime, composition root |
+| Composition root | `app.Wire(WireDeps{Core, Demo})` | Repo facade + services; multi-backend ping |
+| Core Postgres API | `GET/PUT /api/v1/users`, `GET /api/v1/users/:id` | REST verbs, pagination, `MapOr`, 409 stale/conflict |
+| Cross-DB use case | `GET /api/v1/users/:id/audit` | Service reads core + demo Postgres (no cross-DB transaction) |
+| Demo (memory) | `GET/POST/PATCH/DELETE /demo/items`, `QUERY /demo/search` | CRUD, cursor pagination, HTTP QUERY, validation collections |
+| Binding extras | `GET /demo/preferences` | `header:` + `cookie:` tags |
+| Auth / security | `/demo/auth/login`, `/demo/me`, `/demo/session`, `/demo/admin`, `/demo/scoped-admin` | Bearer, header key, cookie key, OAuth2 scopes → 403 |
 | Multipart | `POST /demo/upload` | `form` tags + `*multipart.FileHeader`, OpenAPI `Requests` encoding |
-| Multi-surface OpenAPI | `/openapi.json`, `/mobile/openapi.json`, `/console/openapi.json`, `/demo/openapi.json` | Prefix + tag filtering, component `$ref` schemas |
+| Multi-surface OpenAPI | `/openapi.json`, `/mobile/...`, `/console/...`, `/demo/...` | Prefix + tag filtering, `$ref` schemas, webhooks |
+| Streaming / binary (docs) | `POST /demo/stream`, `GET /demo/export/:id` | SSE itemSchema in spec; imperative octet-stream export |
+| Raw JSON | `GET /demo/raw` | Success without RES envelope |
 | Docs-only | `GET /demo/ws` (Describe) | 101 WebSocket in spec, no Fiber handler |
-| Escape hatches | `GET /demo/leak`, `/demo/plain`, `/api/v1/boom` | Internal error leak protection, plain errors, imperative Fiber |
+| Escape hatches | `GET /demo/leak`, `/demo/plain` | Internal error leak protection, plain errors, imperative Fiber |
+
+Quick start:
 
 ```bash
 make dev-up && go run ./examples/showcase
-
-curl http://127.0.0.1:8080/api/v1/users
-curl http://127.0.0.1:8080/demo/items/1
-curl http://127.0.0.1:8080/demo/items/99          # internal → mapped 500
-curl -X POST http://127.0.0.1:8080/demo/items     # validation collection → 422
-curl -F title=report -F file=@README.md http://127.0.0.1:8080/demo/upload
-curl http://127.0.0.1:8080/demo/leak              # internal never leaks
-curl http://127.0.0.1:8080/openapi.json
-curl http://127.0.0.1:8080/demo/openapi.json
+# See showcase/TESTING.md for every curl command
 ```
 
 ## Tier 2 — Separate concerns
@@ -77,7 +127,7 @@ runtime          supervises Units (lifecycle only)
 ```
 
 - **Logger**: `logger.New` + `defer appLog.Close()` on the root only. Derive per-unit labels (`log.Derive("http")`); never Close children.
-- **Dependencies** are built in `main` / `run()` and released with `defer`.
+- **Dependencies** are built in `app.Run()` and released with `defer`.
 - **Narrowing**: unit factories pull only what they need (`worker.New(bus, log.Derive("worker"))`).
 - **Errors** on the wire come only from the public catalog; map internal catalogs at boundaries.
 - **OpenAPI**: `openapi.New(t, ...)`, `r.Route(path).Get(openapi.Route{...})`, `Returns().Err(...)`. Imperative routes use `t.Fiber()`.

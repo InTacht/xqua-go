@@ -58,6 +58,11 @@ func handleHandlerError(c fiber.Ctx, err error, route *compile.Route, catalog *e
 	return writeError(c, err, status)
 }
 
+// WriteHandlerError writes a declared catalog error through the route envelope.
+func WriteHandlerError(c fiber.Ctx, err error, route *compile.Route, catalog *errors.Catalog) error {
+	return handleHandlerError(c, err, route, catalog)
+}
+
 func resolveDeclaredStatus(entries errors.Errors, route *compile.Route) (int, bool) {
 	best := 0
 	for _, e := range entries {

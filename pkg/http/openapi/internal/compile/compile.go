@@ -45,15 +45,16 @@ type Input struct {
 
 // Route is a compiled, registration-time route ready for the adapter.
 type Route struct {
-	Method      string
-	Path        string
-	Binder      *binder.Binder
-	Call        func(ctx context.Context, in any) (any, error)
-	Enveloped   bool
-	SuccessType reflect.Type
-	InType      reflect.Type
-	ErrCases    []ErrCase
-	ErrIndex    map[*errors.Error]int
+	Method       string
+	Path         string
+	Binder       *binder.Binder
+	Call         func(ctx context.Context, in any) (any, error)
+	Enveloped    bool
+	SuccessType  reflect.Type
+	InType       reflect.Type
+	ErrCases     []ErrCase
+	ErrIndex     map[*errors.Error]int
+	Unauthorized *errors.Error
 }
 
 // Build validates and compiles a route. It panics on contract violations.
@@ -106,16 +107,25 @@ func Build(in Input) *Route {
 		}
 	}
 
+	var unauthorized *errors.Error
+	for _, c := range in.ErrCases {
+		if c.Status == 401 && len(c.Errors) > 0 {
+			unauthorized = c.Errors[0]
+			break
+		}
+	}
+
 	return &Route{
-		Method:      in.Method,
-		Path:        in.Path,
-		Binder:      b,
-		Call:        call,
-		Enveloped:   in.Enveloped,
-		SuccessType: in.SuccessType,
-		InType:      inType,
-		ErrCases:    append([]ErrCase(nil), in.ErrCases...),
-		ErrIndex:    errIndex,
+		Method:       in.Method,
+		Path:         in.Path,
+		Binder:       b,
+		Call:         call,
+		Enveloped:    in.Enveloped,
+		SuccessType:  in.SuccessType,
+		InType:       inType,
+		ErrCases:     append([]ErrCase(nil), in.ErrCases...),
+		ErrIndex:     errIndex,
+		Unauthorized: unauthorized,
 	}
 }
 

@@ -1,10 +1,9 @@
-package store
+package core
 
 import "github.com/InTacht/xqua-go/pkg/errors"
 
-// Catalog holds internal store errors. They must be mapped into the service's
-// public API catalog before crossing the HTTP boundary.
-var Catalog = errors.NewCatalog("store")
+// Catalog holds internal core-database repository errors.
+var Catalog = errors.NewCatalog("core")
 
 var (
 	// ErrNotFound is returned when a user row does not exist.
@@ -14,5 +13,9 @@ var (
 	// ErrQuery is returned when a database operation fails unexpectedly.
 	ErrQuery = Catalog.Define(errors.Def{
 		Kind: "internal", Code: "20002", Message: "user query failed",
+	})
+	// ErrConflict is returned when an update violates a uniqueness constraint.
+	ErrConflict = Catalog.Define(errors.Def{
+		Kind: "conflict", Code: "20003", Message: "user conflict",
 	})
 )

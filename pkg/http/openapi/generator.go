@@ -56,6 +56,13 @@ type Config struct {
 	//     for programmatic generation);
 	//   - non-empty: exactly those documents.
 	Specs []Spec
+
+	// Schemes registers named security schemes for enforcement and OpenAPI output.
+	Schemes map[string]Scheme
+
+	// Security is the engine-wide default requirement for routes that do not
+	// override it with Route.Security or GroupConfig.Security.
+	Security SecuritySpec
 }
 
 // Generator is the declarative REST/OpenAPI engine. It attaches to a Transport,
@@ -67,9 +74,11 @@ type Generator struct {
 	log     runtime.Logger
 	version string
 
-	kindStatuses  KindStatuses
-	defaultStatus int
-	rec           *recorder
+	kindStatuses    KindStatuses
+	defaultStatus   int
+	schemes         map[string]Scheme
+	defaultSecurity SecuritySpec
+	rec             *recorder
 }
 
 // New attaches an OpenAPI engine to a transport. It reads the transport's Fiber
@@ -85,13 +94,15 @@ func New(t *xhttp.Transport, cfg Config) *Generator {
 		ds = t.DefaultStatus()
 	}
 	g := &Generator{
-		app:           t.Fiber(),
-		catalog:       t.Catalog(),
-		log:           t.Logger(),
-		version:       t.Version(),
-		kindStatuses:  ks,
-		defaultStatus: ds,
-		rec:           &recorder{},
+		app:             t.Fiber(),
+		catalog:         t.Catalog(),
+		log:             t.Logger(),
+		version:         t.Version(),
+		kindStatuses:    ks,
+		defaultStatus:   ds,
+		schemes:         cfg.Schemes,
+		defaultSecurity: cfg.Security,
+		rec:             &recorder{},
 	}
 	g.install(cfg.Specs)
 	return g
@@ -99,7 +110,7 @@ func New(t *xhttp.Transport, cfg Config) *Generator {
 
 // Routes registers routes under a path prefix.
 func (g *Generator) Routes(path string, register func(r *Router)) *Generator {
-	register(newRouter(g.app.Group(path), g.catalog, g.kindStatuses, g.defaultStatus, path, g.rec))
+	register(newRouter(g.app.Group(path), g.catalog, g.kindStatuses, g.defaultStatus, path, g.rec, g.schemes, g.defaultSecurity))
 	return g
 }
 
@@ -118,7 +129,7 @@ func (g *Generator) Manifest() Manifest {
 // pure (no server involved) and useful for CLI/tests. The served endpoints use
 // the same path internally.
 func (g *Generator) Document(s Spec) (*Document, error) {
-	return buildDocument(g.Manifest(), s, g.version)
+	return buildDocument(g.Manifest(), s, g.version, g.schemes, g.defaultSecurity)
 }
 
 // install auto-registers a GET handler per configured document on Fiber. The
@@ -203,11 +214,11 @@ type Webhook struct {
 // reflect-derived request/response schemas, catalog error responses (carried
 // under x-xqua-errors), and a default error-envelope response. The document is
 // validated against OpenAPI 3.2 before it is returned.
-func buildDocument(m Manifest, s Spec, defaultVersion string) (*Document, error) {
+func buildDocument(m Manifest, s Spec, defaultVersion string, schemes map[string]Scheme, defaultSecurity SecuritySpec) (*Document, error) {
 	m = m.ForSpec(s.Prefix, s.Specs)
 
 	cfg := specConfig(s, defaultVersion)
-	doc := newDocument(cfg, s, m)
+	doc := newDocument(cfg, s, m, schemes, defaultSecurity)
 	b := builder.NewBuilder(cfg, doc)
 	pathParser := parser.NewColonParamParser()
 
@@ -274,7 +285,7 @@ func specConfig(s Spec, defaultVersion string) *spec.Config {
 
 // newDocument seeds the OpenAPI document with document-level metadata, the RES
 // envelope component schemas, and the spec's own component schemas.
-func newDocument(cfg *spec.Config, s Spec, m Manifest) *spec.Document {
+func newDocument(cfg *spec.Config, s Spec, m Manifest, schemes map[string]Scheme, defaultSecurity SecuritySpec) *spec.Document {
 	doc := &spec.Document{
 		OpenAPI:           cfg.OpenAPIVersion,
 		Self:              cfg.Self,
@@ -288,13 +299,13 @@ func newDocument(cfg *spec.Config, s Spec, m Manifest) *spec.Document {
 			License:     cfg.License,
 		},
 		Servers:      cfg.Servers,
-		Security:     cfg.Security,
+		Security:     DocumentSecurity(s.Security, defaultSecurity),
 		Tags:         cfg.Tags,
 		ExternalDocs: cfg.ExternalDocs,
 		Paths:        map[string]*spec.PathItem{},
 		Components: &spec.Components{
 			Schemas:         envelopeComponents(),
-			SecuritySchemes: cfg.SecuritySchemes,
+			SecuritySchemes: MergeSecuritySchemes(s.SecuritySchemes, schemes),
 		},
 		Extra: map[string]any{envelopeVersionExtension: m.EnvelopeVersion},
 	}
@@ -349,15 +360,17 @@ func addWebhook(b *builder.Builder, pathParser spec.PathParser, name string, wh 
 	if method == "" {
 		method = http.MethodPost
 	}
+	requirements, public := ResolveSecurity(wh.Security, nil, InheritSecurity())
 	decl := operationDecl{
-		deprecated:   wh.Deprecated,
-		hidden:       wh.Hidden,
-		externalDocs: wh.ExternalDocs,
-		security:     wh.Security,
-		request:      wh.Request,
-		requests:     wh.Requests,
-		successBody:  successBodyFromWebhook(wh),
-		extra:        wh.Extra,
+		deprecated:     wh.Deprecated,
+		hidden:         wh.Hidden,
+		externalDocs:   wh.ExternalDocs,
+		security:       requirements,
+		securityPublic: public,
+		request:        wh.Request,
+		requests:       wh.Requests,
+		successBody:    successBodyFromWebhook(wh),
+		extra:          wh.Extra,
 	}
 	opCfg := operationConfig(method, wh.OperationID, name, wh.Summary, wh.Description, wh.Tags, decl)
 	if _, err := applyResponses(b, &opCfg, decl.successBody, decl.extra); err != nil {
@@ -374,14 +387,15 @@ func operationConfig(method, operationID, target, summary, description string, t
 		id = operationIDFrom(method, target)
 	}
 	opCfg := builder.OperationConfig{
-		OperationID:  id,
-		Summary:      summary,
-		Description:  description,
-		Tags:         tags,
-		Deprecated:   decl.deprecated,
-		Hide:         decl.hidden,
-		ExternalDocs: decl.externalDocs,
-		Security:     securityConfigs(decl.security),
+		OperationID:    id,
+		Summary:        summary,
+		Description:    description,
+		Tags:           tags,
+		Deprecated:     decl.deprecated,
+		Hide:           decl.hidden,
+		ExternalDocs:   decl.externalDocs,
+		SecurityPublic: decl.securityPublic,
+		Security:       securityConfigs(decl.security),
 	}
 	if decl.request != nil {
 		opCfg.Requests = append(opCfg.Requests, &spec.ContentUnit{Structure: decl.request})

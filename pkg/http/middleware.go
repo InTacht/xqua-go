@@ -1,6 +1,7 @@
 package http
 
 import (
+	stderrors "errors"
 	"fmt"
 	"time"
 
@@ -81,6 +82,13 @@ func AccessLog(log runtime.Logger) Handler {
 		err := c.Next()
 
 		status := c.Response().StatusCode()
+		if err != nil && status < fiber.StatusBadRequest {
+			if fe, ok := stderrors.AsType[*fiber.Error](err); ok {
+				status = fe.Code
+			} else {
+				status = fiber.StatusInternalServerError
+			}
+		}
 		detail := fmt.Sprintf("status=%d latency=%s", status, time.Since(start))
 		ctx := c.Context()
 		switch {

@@ -30,6 +30,11 @@ type jsonIn struct {
 	Email string `json:"email"`
 }
 
+type jsonRequiredIn struct {
+	Username string `json:"username" required:"true"`
+	Password string `json:"password" required:"true"`
+}
+
 func TestBindJSONBody(t *testing.T) {
 	app := fiber.New()
 	app.Post("/users", func(c fiber.Ctx) error {
@@ -48,6 +53,58 @@ func TestBindJSONBody(t *testing.T) {
 	req := httptest.NewRequest("POST", "/users", strings.NewReader(`{"email":"a@b.c"}`))
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestBindJSONRequiredFields(t *testing.T) {
+	app := fiber.New()
+	app.Post("/login", func(c fiber.Ctx) error {
+		b := binder.New(reflect.TypeFor[jsonRequiredIn](), []*errors.Error{errValidation})
+		_, err := b.BindRequest(c)
+		if err == nil {
+			return c.SendStatus(200)
+		}
+		es, ok := err.(errors.Errors)
+		if !ok || len(es) != 2 {
+			t.Fatalf("expected two validation errors, got %v", err)
+		}
+		return c.SendStatus(422)
+	})
+
+	req := httptest.NewRequest("POST", "/login", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 422 {
+		t.Fatalf("expected 422, got %d", resp.StatusCode)
+	}
+}
+
+func TestBindQueryDefaultSkipsMinimumOnMissing(t *testing.T) {
+	type auditIn struct {
+		Limit int `query:"limit" default:"20" minimum:"1" maximum:"100"`
+	}
+	app := fiber.New()
+	app.Get("/audit", func(c fiber.Ctx) error {
+		b := binder.New(reflect.TypeFor[auditIn](), []*errors.Error{errValidation})
+		in, err := b.BindRequest(c)
+		if err != nil {
+			return c.Status(422).SendString(err.Error())
+		}
+		if got := in.(auditIn).Limit; got != 20 {
+			t.Fatalf("expected default limit 20, got %d", got)
+		}
+		return c.SendStatus(200)
+	})
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/audit", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,5 +258,120 @@ func TestBindMultipartMultipleFiles(t *testing.T) {
 	}
 	if resp.StatusCode != 200 {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+type queryRequiredIn struct {
+	Filter string `query:"filter" required:"true"`
+}
+
+func TestBindQueryRequiredField(t *testing.T) {
+	app := fiber.New()
+	app.Get("/search", func(c fiber.Ctx) error {
+		b := binder.New(reflect.TypeFor[queryRequiredIn](), []*errors.Error{errValidation})
+		_, err := b.BindRequest(c)
+		if err == nil {
+			return c.SendStatus(200)
+		}
+		es, ok := err.(errors.Errors)
+		if !ok || len(es) != 1 || es[0].Source != "query.filter" {
+			t.Fatalf("expected query.filter required error, got %v", err)
+		}
+		return c.SendStatus(422)
+	})
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/search", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 422 {
+		t.Fatalf("expected 422, got %d", resp.StatusCode)
+	}
+}
+
+type headerRequiredIn struct {
+	Token string `header:"X-Token" required:"true"`
+}
+
+func TestBindHeaderRequiredField(t *testing.T) {
+	app := fiber.New()
+	app.Get("/secure", func(c fiber.Ctx) error {
+		b := binder.New(reflect.TypeFor[headerRequiredIn](), []*errors.Error{errValidation})
+		_, err := b.BindRequest(c)
+		if err == nil {
+			return c.SendStatus(200)
+		}
+		es, ok := err.(errors.Errors)
+		if !ok || len(es) != 1 || es[0].Source != "header.X-Token" {
+			t.Fatalf("expected header.X-Token required error, got %v", err)
+		}
+		return c.SendStatus(422)
+	})
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/secure", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 422 {
+		t.Fatalf("expected 422, got %d", resp.StatusCode)
+	}
+}
+
+type cookieRequiredIn struct {
+	Session string `cookie:"session" required:"true"`
+}
+
+func TestBindCookieRequiredField(t *testing.T) {
+	app := fiber.New()
+	app.Get("/session", func(c fiber.Ctx) error {
+		b := binder.New(reflect.TypeFor[cookieRequiredIn](), []*errors.Error{errValidation})
+		_, err := b.BindRequest(c)
+		if err == nil {
+			return c.SendStatus(200)
+		}
+		es, ok := err.(errors.Errors)
+		if !ok || len(es) != 1 || es[0].Source != "cookie.session" {
+			t.Fatalf("expected cookie.session required error, got %v", err)
+		}
+		return c.SendStatus(422)
+	})
+
+	resp, err := app.Test(httptest.NewRequest("GET", "/session", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 422 {
+		t.Fatalf("expected 422, got %d", resp.StatusCode)
+	}
+}
+
+func TestBindMultipartMissingRequiredFile(t *testing.T) {
+	app := fiber.New()
+	app.Post("/upload", func(c fiber.Ctx) error {
+		b := binder.New(reflect.TypeFor[uploadIn](), []*errors.Error{errValidation})
+		_, err := b.BindRequest(c)
+		if err == nil {
+			return c.SendStatus(200)
+		}
+		es, ok := err.(errors.Errors)
+		if !ok || len(es) != 1 || es[0].Source != "form.file" {
+			t.Fatalf("expected form.file required error, got %v", err)
+		}
+		return c.SendStatus(422)
+	})
+
+	body := &bytes.Buffer{}
+	w := multipart.NewWriter(body)
+	_ = w.WriteField("title", "report")
+	_ = w.Close()
+
+	req := httptest.NewRequest("POST", "/upload", body)
+	req.Header.Set("Content-Type", w.FormDataContentType())
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != 422 {
+		t.Fatalf("expected 422, got %d", resp.StatusCode)
 	}
 }

@@ -12,6 +12,7 @@ services:
       retries: 15
     volumes:
       - xqua_go_pg_data:/var/lib/postgresql/data
+      - ./scripts/dev-postgres-init:/docker-entrypoint-initdb.d:ro
 
 volumes:
   xqua_go_pg_data:

@@ -68,8 +68,12 @@ func (b *Builder) AddOperationTo(
 	op.ExternalDocs = cfg.ExternalDocs
 	op.Deprecated = cfg.Deprecated
 	op.Tags = append(op.Tags, cfg.Tags...)
-	for _, sec := range cfg.Security {
-		op.Security = append(op.Security, SecurityRequirement(sec.Name, sec.Scopes))
+	if cfg.SecurityPublic {
+		op.Security = []spec.SecurityRequirement{}
+	} else {
+		for _, sec := range cfg.Security {
+			op.Security = append(op.Security, SecurityRequirement(sec.Name, sec.Scopes))
+		}
 	}
 
 	for _, req := range cfg.Requests {

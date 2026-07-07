@@ -536,6 +536,38 @@ func TestDeviceOAuth(t *testing.T) {
 	}
 }
 
+func TestConfigSchemesMergedIntoDocument(t *testing.T) {
+	tr := http.New(http.Config{Logger: specLogger(), Catalog: specCatalog, Fallbacks: specFallbacks, Version: "1.2.3"})
+	api := openapi.New(tr, openapi.Config{
+		Specs: []openapi.Spec{},
+		Schemes: map[string]openapi.Scheme{
+			"BearerAuth": openapi.BearerScheme(openapi.BearerOptions{Format: "JWT"}),
+		},
+	})
+	api.Routes("/api", func(r *openapi.Router) {
+		r.Describe("/secure").Get(openapi.Route{
+			Summary:   "Secure route",
+			Security:  openapi.RequireSecurity("BearerAuth"),
+			Responses: openapi.Returns(specAckOut{}),
+		})
+	})
+
+	doc, err := api.Document(openapi.Spec{Title: "API"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc.Components.SecuritySchemes["BearerAuth"] == nil {
+		t.Fatal("expected BearerAuth in components.securitySchemes")
+	}
+	item := doc.Paths["/api/secure"]
+	if item == nil || item.Get == nil {
+		t.Fatal("expected GET /api/secure operation")
+	}
+	if len(item.Get.Security) != 1 || item.Get.Security[0]["BearerAuth"] == nil {
+		t.Fatalf("expected operation security, got %+v", item.Get.Security)
+	}
+}
+
 // TestMultipartBodyEncoding verifies ContentType and Encoding on request bodies
 // (o2-style multipart uploads).
 func TestMultipartBodyEncoding(t *testing.T) {

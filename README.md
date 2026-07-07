@@ -195,8 +195,33 @@ OpenAPI **3.2** extras:
 
 - **Streaming** — `Route.Extra` with `ResponseDecl.ItemBody` for SSE/WebSocket docs; live streaming uses `Router.Fiber()`.
 - **QUERY** — `Route(path).Query(...)` registers the HTTP QUERY method.
-- **Device OAuth** — `Spec.SecuritySchemes` / `Security` support `oauth2` with `flows.deviceAuthorization`.
+- **Security** — `Config.Schemes` registers Bearer, API key, HTTP, OAuth2, OIDC, and mTLS schemes; `Verify` hooks enforce them and attach `Identity` (`any`) to context. Use `RequireSecurity`, `RequireAnySecurity`, or `PublicSecurity` on routes/groups.
 - **Multipart** — `Route.Requests` with `ContentType: "multipart/form-data"` and optional `Encoding` per part.
+
+Secured route example:
+
+```go
+api := openapi.New(t, openapi.Config{
+    Schemes: map[string]openapi.Scheme{
+        "BearerAuth": openapi.BearerScheme(openapi.BearerOptions{Verify: verifyToken}),
+        "ApiKey": openapi.APIKeyScheme(openapi.APIKeyOptions{
+            Name: "X-API-Token", In: openapi.InHeader, Verify: verifyAPIKey,
+        }),
+    },
+})
+api.Routes("/api/v1", func(r *openapi.Router) {
+    r.Route("/auth/login").Post(openapi.Route{
+        Handler: login, Security: openapi.PublicSecurity(),
+        Responses: openapi.Returns().Err(401, errUnauthorized),
+    })
+    r.Route("/me").Get(openapi.Route{
+        Handler: me,
+        Security: openapi.RequireAnySecurity("BearerAuth", "ApiKey"),
+        Responses: openapi.Returns().Err(401, errUnauthorized),
+    })
+})
+// In handlers: user, ok := openapi.IdentityAs[User](ctx)
+```
 
 ## Configuration from the environment
 
@@ -256,7 +281,7 @@ Keep construction and `defer` inside a `run() error` function and return errors 
 
 ## Examples
 
-Guided platter: [`examples/README.md`](examples/README.md) — start with `hello`, then `showcase` for the full HTTP/OpenAPI surface.
+Guided platter: [`examples/README.md`](examples/README.md) — start with `hello`, then `showcase` for the full HTTP/OpenAPI surface. Full showcase curl recipes: [`examples/showcase/TESTING.md`](examples/showcase/TESTING.md).
 
 ```bash
 go run ./examples/hello
@@ -264,14 +289,13 @@ make dev-up && go run ./examples/showcase
 go run ./examples/multiport
 go run ./examples/bus
 go run ./examples/split
-make dev-up && go run ./examples/showcase
 go run ./examples/logging
 ```
 
 | Example | Shows |
 |---------|--------|
 | `hello` | Minimal runtime + typed handler + `/openapi.json` |
-| `showcase` | Postgres users, demo routes, multipart, multi-surface OpenAPI, catalog discipline |
+| `showcase` | Postgres users, demo routes, multipart, multi-surface OpenAPI, catalog discipline ([`TESTING.md`](examples/showcase/TESTING.md)) |
 | `multiport` | Two HTTP units on `:8080` and `:8081` in one process |
 | `bus` | Local bus with competing queue workers |
 | `split` | HTTP compute unit + storage unit over bus only |
