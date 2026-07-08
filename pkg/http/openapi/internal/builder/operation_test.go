@@ -49,6 +49,27 @@ func TestBuilder_AddRequest(t *testing.T) {
 		assert.Equal(t, "text/plain", mt.Encoding["foo"].ContentType)
 	})
 
+	t.Run("Path and JSON body", func(t *testing.T) {
+		cfg := &spec.Config{OpenAPIVersion: spec.Version320}
+		doc := &spec.Document{}
+		b := NewBuilder(cfg, doc)
+		op := &spec.Operation{}
+
+		type Request struct {
+			ID       string            `path:"id"`
+			Metadata map[string]string `json:"metadata" required:"true"`
+		}
+		cu := &spec.ContentUnit{Structure: &Request{}, Required: true}
+		require.NoError(t, b.AddRequest(op, cu))
+
+		require.Len(t, op.Parameters, 1)
+		require.NotNil(t, op.RequestBody)
+		assert.True(t, op.RequestBody.Required)
+		mt := op.RequestBody.Content["application/json"]
+		require.NotNil(t, mt.Schema)
+		assert.NotNil(t, mt.Schema.Properties["metadata"])
+	})
+
 	t.Run("Default String Body", func(t *testing.T) {
 		cfg := &spec.Config{OpenAPIVersion: spec.Version304}
 		doc := &spec.Document{}

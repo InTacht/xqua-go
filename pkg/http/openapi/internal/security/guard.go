@@ -44,6 +44,7 @@ func Guard(
 	}
 	return func(c fiber.Ctx) error {
 		var forbiddenErr error
+		var authErr401 error
 		for _, req := range requirements {
 			if len(req.Names) == 0 {
 				continue
@@ -63,8 +64,13 @@ func Guard(
 				Scopes: req.Scopes,
 			})
 			if err != nil {
-				if st, ok := ResolveAuthStatus(err, route.ErrCases); ok && st == 403 {
-					forbiddenErr = err
+				if st, ok := ResolveAuthStatus(err, route.ErrCases); ok {
+					switch st {
+					case 403:
+						forbiddenErr = err
+					case 401:
+						authErr401 = err
+					}
 				}
 				continue
 			}
@@ -73,6 +79,9 @@ func Guard(
 		}
 		if forbiddenErr != nil {
 			return adapter.WriteHandlerError(c, forbiddenErr, route, catalog)
+		}
+		if authErr401 != nil {
+			return adapter.WriteHandlerError(c, authErr401, route, catalog)
 		}
 		if unauthorized != nil {
 			return adapter.WriteHandlerError(c, unauthorized, route, catalog)

@@ -65,6 +65,7 @@ type GroupConfig struct {
 	Deprecated  bool
 	Hidden      bool
 	Security    SecuritySpec
+	AfterAuth   []Middleware
 }
 
 type routeContract struct {
@@ -169,6 +170,7 @@ type Router struct {
 	schemes         map[string]Scheme
 	defaultSecurity SecuritySpec
 	securityStack   []SecuritySpec
+	middlewareStack []Middleware
 }
 
 func newRouter(
@@ -199,6 +201,7 @@ func (r *Router) Group(g GroupConfig) *Router {
 	if g.Security.isExplicit() {
 		stack = append(append([]SecuritySpec(nil), stack...), g.Security)
 	}
+	mwStack := append(append([]Middleware(nil), r.middlewareStack...), g.AfterAuth...)
 	return &Router{
 		router:          r.router.Group(g.Prefix),
 		catalog:         r.catalog,
@@ -210,6 +213,7 @@ func (r *Router) Group(g GroupConfig) *Router {
 		schemes:         r.schemes,
 		defaultSecurity: r.defaultSecurity,
 		securityStack:   stack,
+		middlewareStack: mwStack,
 	}
 }
 

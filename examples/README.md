@@ -1,5 +1,7 @@
 # Examples
 
+**User guide:** [guides/README.md](../guides/README.md) — how to build services with xqua-go.
+
 Two tiers: start with **`hello`**, then open **`showcase`** for the full HTTP/OpenAPI surface. The rest are **separate programs** — each demonstrates one orthogonal idea (bus, ports, logging).
 
 ## Tier 1 — HTTP essentials

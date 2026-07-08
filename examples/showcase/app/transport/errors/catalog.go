@@ -52,6 +52,18 @@ var (
 	ErrForbidden = Catalog.Define(xerrors.Def{
 		Kind: xerrors.KindForbidden, Code: "11007", Message: "forbidden",
 	})
+	ErrMissingBearer = Catalog.Define(xerrors.Def{
+		Kind: xerrors.KindUnauthorized, Code: "11012", Message: "missing bearer",
+	})
+	ErrTokenExpired = Catalog.Define(xerrors.Def{
+		Kind: xerrors.KindUnauthorized, Code: "11013", Message: "token expired",
+	})
+	ErrInvalidToken = Catalog.Define(xerrors.Def{
+		Kind: xerrors.KindUnauthorized, Code: "11014", Message: "invalid token",
+	})
+	ErrRateLimited = Catalog.Define(xerrors.Def{
+		Kind: xerrors.KindRateLimit, Code: "11015", Message: "rate limited",
+	})
 )
 
 // Fallbacks are registered once so repeated transport construction (e.g. tests)

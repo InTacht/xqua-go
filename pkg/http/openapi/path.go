@@ -48,6 +48,7 @@ func (p *PathRouter) register(method string, route Route) *PathRouter {
 	compiled, contract := p.parent.compileRoute(method, p.path, route, false)
 	if p.parent.router != nil {
 		h := adapter.Handler(compiled, p.parent.catalog)
+		h = wrapAfterAuth(compiled, p.parent.catalog, p.parent.middlewareStack, h)
 		if len(contract.security) > 0 {
 			h = wrapWithSecurity(compiled, contract.security, p.parent.schemes, p.parent.catalog, h)
 		}

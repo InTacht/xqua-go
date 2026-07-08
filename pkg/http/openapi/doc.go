@@ -107,7 +107,59 @@
 //
 // Secured live routes must declare Responses.Err(401, ...) and Err(403, ...) when
 // scopes are required. The guard runs before binding; handlers read identity with
-// openapi.IdentityFrom(ctx) or openapi.IdentityAs[T](ctx).
+// openapi.IdentityFrom(ctx) or openapi.IdentityAs[T](ctx). List every distinct
+// verify outcome on the group Err(401, ...) list — the first entry is the missing-
+// credential fallback; verify failures return the matching declared error.
+//
+// # Group middleware (AfterAuth)
+//
+// Cross-cutting concerns that run after authentication and before binding belong
+// on GroupConfig.AfterAuth, not on Router.Fiber().Use(). The chain is fixed:
+//
+//	Guard → AfterAuth (inherited from parent groups) → Binder → Handler
+//
+// Middleware receives openapi.RouteContext with WriteError for catalog errors
+// declared on the group or route. Returning a declared error short-circuits
+// through the adapter (same path as handler errors):
+//
+//	v1 := r.Group(openapi.GroupConfig{
+//	    Security: openapi.RequireSecurity("BearerAuth"),
+//	    Responses: openapi.Returns().Err(429, errRateLimited),
+//	    AfterAuth: []openapi.Middleware{
+//	        ratelimit.PerKey(limiter, ratelimit.ByAPIKey),
+//	    },
+//	})
+//
+// Router.Fiber() remains for streaming, WebSockets, and other non-openapi routes.
+//
+// # Idempotency (replay as 200)
+//
+// Duplicate idempotent requests should return HTTP 200 with the same success out
+// type, not a hybrid error envelope. Set a replayed flag in the response data:
+//
+//	type triggerOut struct {
+//	    openapi.Response
+//	    Data struct {
+//	        RunID    string `json:"run_id"`
+//	        Replayed bool   `json:"replayed,omitempty"`
+//	    } `json:"data"`
+//	}
+//
+// Use plain Err(409, ...) only for conflicts the client must resolve (stale
+// version, uniqueness violations) — not for idempotency replay.
+//
+// # Dynamic request bodies
+//
+// Prefer typed struct fields. When keys are dynamic, wrap them in a domain-named
+// JSON property — not a flat root map:
+//
+//	type replaceDataIn struct {
+//	    ID       string            `path:"id"`
+//	    Metadata map[string]string `json:"metadata" required:"true"`
+//	}
+//
+// The wrapper name (metadata, attributes, properties, …) is implementor-defined.
+// Avoid json:"data" on requests when responses already use a data envelope.
 //
 // # Documentation-only operations and webhooks
 //

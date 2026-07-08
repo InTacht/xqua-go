@@ -6,6 +6,7 @@ import (
 	"github.com/InTacht/xqua-go/examples/showcase/app/transport/auth"
 	"github.com/InTacht/xqua-go/examples/showcase/app/transport/errors"
 	"github.com/InTacht/xqua-go/examples/showcase/app/transport/routes/demo"
+	"github.com/InTacht/xqua-go/examples/showcase/app/transport/routes/patterns"
 	"github.com/InTacht/xqua-go/examples/showcase/app/transport/routes/surfaces"
 	"github.com/InTacht/xqua-go/examples/showcase/app/transport/routes/users"
 	authsvc "github.com/InTacht/xqua-go/examples/showcase/pkg/services/auth"
@@ -89,7 +90,7 @@ func HTTP(cfg Config, log runtime.Logger) runtime.Unit {
 	})
 
 	api := openapi.New(t, openapi.Config{
-		Schemes: auth.Schemes(cfg.Auth),
+		Schemes: mergeSchemes(auth.Schemes(cfg.Auth), patterns.Schemes()),
 		Specs: []openapi.Spec{
 			{Path: "/openapi.json", Prefix: "/api/v1", Title: cfg.Name, Version: cfg.Version},
 			{Path: "/mobile/openapi.json", Prefix: "/mobile", Title: "Mobile API", Version: cfg.Version, Schemas: manageRequestSchemas},
@@ -115,7 +116,22 @@ func HTTP(cfg Config, log runtime.Logger) runtime.Unit {
 	users.Register(api, cfg.Users, log)
 	demo.Register(api, cfg.Items, t, log)
 	auth.Register(api, cfg.Auth)
+	patterns.Register(api)
 	surfaces.Register(api)
 
 	return t
+}
+
+func mergeSchemes(base, extra map[string]openapi.Scheme) map[string]openapi.Scheme {
+	if len(extra) == 0 {
+		return base
+	}
+	out := make(map[string]openapi.Scheme, len(base)+len(extra))
+	for k, v := range base {
+		out[k] = v
+	}
+	for k, v := range extra {
+		out[k] = v
+	}
+	return out
 }

@@ -19,8 +19,10 @@ import (
 var guardCatalog = errors.NewCatalog("guard")
 
 var (
-	errUnauthorized = guardCatalog.Define(errors.Def{Kind: errors.KindUnauthorized, Code: "14001", Message: "unauthorized"})
-	errForbidden    = guardCatalog.Define(errors.Def{Kind: errors.KindForbidden, Code: "14003", Message: "forbidden"})
+	errUnauthorized  = guardCatalog.Define(errors.Def{Kind: errors.KindUnauthorized, Code: "401001", Message: "missing bearer"})
+	errExpired       = guardCatalog.Define(errors.Def{Kind: errors.KindUnauthorized, Code: "401002", Message: "api key expired"})
+	errInvalidAPIKey = guardCatalog.Define(errors.Def{Kind: errors.KindUnauthorized, Code: "401003", Message: "invalid api key"})
+	errForbidden     = guardCatalog.Define(errors.Def{Kind: errors.KindForbidden, Code: "14003", Message: "forbidden"})
 )
 
 func TestGuardBearerSuccess(t *testing.T) {
@@ -149,6 +151,83 @@ func TestGuardForbiddenScope403(t *testing.T) {
 	first, _ := errs[0].(map[string]any)
 	if first["code"] != errForbidden.Code {
 		t.Fatalf("expected code %q, got %v", errForbidden.Code, first["code"])
+	}
+}
+
+func TestGuardVerifyReturnsDeclared401NotGeneric(t *testing.T) {
+	route := &compile.Route{
+		ErrCases: []compile.ErrCase{
+			{Status: 401, Errors: []*errors.Error{errUnauthorized, errExpired, errInvalidAPIKey}},
+		},
+		Unauthorized: errUnauthorized,
+	}
+	schemes := map[string]security.Scheme{
+		"Bearer": {
+			Extract: func(c fiber.Ctx) (string, bool) {
+				return "present", true
+			},
+			Verify: func(ctx context.Context, cred security.Credential) (any, error) {
+				switch cred.Raw {
+				case "expired":
+					return nil, errExpired
+				case "invalid":
+					return nil, errInvalidAPIKey
+				default:
+					return "user-1", nil
+				}
+			},
+		},
+	}
+	next := func(c fiber.Ctx) error { return c.SendStatus(http.StatusOK) }
+
+	t.Run("expired", func(t *testing.T) {
+		app := fiber.New()
+		app.Get("/", security.Guard(route, []security.Requirement{{Names: []string{"Bearer"}}}, map[string]security.Scheme{
+			"Bearer": {
+				Extract: func(c fiber.Ctx) (string, bool) { return "expired", true },
+				Verify:  schemes["Bearer"].Verify,
+			},
+		}, guardCatalog, errUnauthorized, next))
+		resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/", nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertErrorCode(t, resp, "401002")
+	})
+
+	t.Run("invalid", func(t *testing.T) {
+		app := fiber.New()
+		app.Get("/invalid", security.Guard(route, []security.Requirement{{Names: []string{"Bearer"}}}, map[string]security.Scheme{
+			"Bearer": {
+				Extract: func(c fiber.Ctx) (string, bool) { return "invalid", true },
+				Verify:  schemes["Bearer"].Verify,
+			},
+		}, guardCatalog, errUnauthorized, next))
+		resp, err := app.Test(httptest.NewRequest(http.MethodGet, "/invalid", nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertErrorCode(t, resp, "401003")
+	})
+}
+
+func assertErrorCode(t *testing.T, resp *http.Response, wantCode string) {
+	t.Helper()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatal(err)
+	}
+	errs, _ := env["errors"].([]any)
+	if len(errs) != 1 {
+		t.Fatalf("expected one error, got %v", env)
+	}
+	first, _ := errs[0].(map[string]any)
+	if first["code"] != wantCode {
+		t.Fatalf("expected code %q, got %v", wantCode, first["code"])
 	}
 }
 

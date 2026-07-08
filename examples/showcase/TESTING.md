@@ -198,6 +198,47 @@ curl -s $H http://127.0.0.1:8080/console/ping | jq .
 
 ---
 
+## Canonical patterns (`/demo/patterns`)
+
+Documented in [guides/patterns.md](../../guides/patterns.md). OpenAPI: paths under `/demo/patterns` in `/demo/openapi.json`.
+
+```bash
+# Missing auth → 401 (code 11012)
+curl -s $H -X POST http://127.0.0.1:8080/demo/patterns/trigger \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: k1' \
+  -d '{"payload":"x"}' | jq .
+
+# Expired token → 401 (code 11013)
+curl -s $H -X POST http://127.0.0.1:8080/demo/patterns/trigger \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer expired-token' \
+  -H 'Idempotency-Key: k2' \
+  -d '{"payload":"x"}' | jq .
+
+# First trigger → 200, run_id set
+curl -s $H -X POST http://127.0.0.1:8080/demo/patterns/trigger \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer good-token' \
+  -H 'Idempotency-Key: idem-1' \
+  -d '{"payload":"notify"}' | jq .
+
+# Same idempotency key → 200, replayed: true, same run_id
+curl -s $H -X POST http://127.0.0.1:8080/demo/patterns/trigger \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer good-token' \
+  -H 'Idempotency-Key: idem-1' \
+  -d '{"payload":"notify"}' | jq .
+
+# Wrapped metadata PUT
+curl -s $H -X PUT http://127.0.0.1:8080/demo/patterns/subscribers/sub-1/data \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer good-token' \
+  -d '{"metadata":{"tier":"gold","plan":"pro"}}' | jq .
+```
+
+---
+
 ## Escape hatches (imperative Fiber)
 
 Internal details must not appear on the wire.
